@@ -699,3 +699,31 @@ fn proxy_and_no_proxy_bootstrap_submit_parameters_without_waiting_for_proxy() {
         std::fs::remove_dir(root).unwrap();
     }
 }
+
+#[test]
+fn transient_cursor_only_pages_are_retried_before_marking_partial() {
+    let g = MockTelegramGateway::pages(vec![
+        page(vec![message(100)]),
+        page(vec![message(100)]),
+        page(vec![message(100), message(99)]),
+    ]);
+    let r = scan(&g, &spec(2), "retry".into(), &AtomicBool::new(false), |_| {}).unwrap();
+    assert_eq!(r.scanned, 2);
+    assert_eq!(r.status, ScanStatus::Complete);
+    assert_eq!(r.pages, 3);
+}
+
+#[test]
+fn permanently_stagnant_cursor_is_bounded() {
+    let g = MockTelegramGateway::pages(vec![
+        page(vec![message(100)]),
+        page(vec![message(100)]),
+        page(vec![message(100)]),
+        page(vec![message(100)]),
+        page(vec![message(99)]),
+    ]);
+    let r = scan(&g, &spec(2), "retry".into(), &AtomicBool::new(false), |_| {}).unwrap();
+    assert_eq!(r.status, ScanStatus::Partial);
+    assert_eq!(r.scanned, 1);
+    assert_eq!(r.pages, 4);
+}
