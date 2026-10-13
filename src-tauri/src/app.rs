@@ -42,6 +42,9 @@ struct AppState {
     sent_updates: Mutex<HashMap<String, String>>,
 }
 fn gateway(s: &AppState) -> Result<Arc<TdlibGateway>> {
+    if s.closing.load(Ordering::SeqCst) {
+        return Err("TDLib is shutting down".into());
+    }
     s.gateway
         .lock()
         .unwrap()
@@ -189,11 +192,25 @@ async fn disconnect(app: tauri::AppHandle) -> Result<()> {
         if let Some((_, c)) = s.active.lock().unwrap().as_ref() {
             c.store(true, Ordering::Relaxed);
         }
-        let g = gateway(&s)?;
-        g.shutdown()?;
-        *s.gateway.lock().unwrap() = None;
+        if s.closing.swap(true, Ordering::SeqCst) {
+            return Err("TDLib shutdown already running".into());
+        }
+        // Invalidating the run before shutdown prevents late history updates
+        // from restoring obsolete results after disconnect.
+        *s.active.lock().unwrap() = None;
         *s.results.lock().unwrap() = None;
-        Ok(())
+        let g = s.gateway.lock().unwrap().clone().ok_or("Not connected");
+        let r = match g {
+            Ok(g) => g.shutdown(),
+            Err(e) => Err(e.into()),
+        };
+        if r.is_ok() {
+            *s.gateway.lock().unwrap() = None;
+            *s.connection.lock().unwrap() = Connection::default();
+            let _ = app.emit("connection", Connection::default());
+        }
+        s.closing.store(false, Ordering::SeqCst);
+        r
     })
     .await
 }
@@ -217,6 +234,9 @@ fn start_query(
     run_id: String,
 ) -> Result<()> {
     spec.validate()?;
+    if s.closing.load(Ordering::SeqCst) {
+        return Err("TDLib is shutting down".into());
+    }
     if run_id.is_empty() || run_id.len() > 100 {
         return Err("Invalid run ID".into());
     }
@@ -355,9 +375,10 @@ fn begin_safe_exit(app: &tauri::AppHandle) {
     if s.closing.swap(true, Ordering::SeqCst) {
         return;
     }
-    if let Some((_, c)) = s.active.lock().unwrap().as_ref() {
+    if let Some((_, c)) = s.active.lock().unwrap().take() {
         c.store(true, Ordering::Relaxed);
     }
+    *s.results.lock().unwrap() = None;
     let handle = app.clone();
     std::thread::spawn(move || {
         let s = handle.state::<AppState>();
