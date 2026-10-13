@@ -4,6 +4,26 @@ version = "0.1.0"
 description = "A Tauri App"
 authors = ["you"]
 edition = "2024"
+default-run = "tmsgpicker"
+
+[features]
+default = ["desktop"]
+desktop = ["dep:tauri", "dep:tauri-plugin-opener"]
+
+[[bin]]
+name = "tmsgpicker"
+path = "src/main.rs"
+required-features = ["desktop"]
+
+[[bin]]
+name = "tdlib_auth"
+path = "src/bin/tdlib_auth.rs"
+required-features = ["desktop"]
+
+[[bin]]
+name = "tdlib_smoke"
+path = "src/bin/tdlib_smoke.rs"
+required-features = ["desktop"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -18,8 +38,8 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
-tauri-plugin-opener = "2"
+tauri = { version = "2", features = [], optional = true }
+tauri-plugin-opener = { version = "2", optional = true }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 rpassword = "7"

@@ -1,0 +1,7 @@
+[
+  {"id":300,"chat_id":-1001,"date":300,"media_album_id":"9223372036854775806","content":{"@type":"messagePhoto","caption":{"text":"Synthetic album"}},"interaction_info":{"view_count":99,"forward_count":8,"reply_info":null,"reactions":null}},
+  {"id":299,"chat_id":-1001,"date":299,"media_album_id":"9223372036854775806","content":{"@type":"messageVideo","caption":{"text":""}},"interaction_info":{"view_count":90,"forward_count":7,"reply_info":{"reply_count":0},"reactions":{"reactions":[{"type":{"@type":"reactionTypeEmoji","emoji":"👍"},"total_count":3},{"type":{"@type":"reactionTypeCustomEmoji","custom_emoji_id":"9223372036854775805"},"total_count":2},{"type":{"@type":"reactionTypePaid"},"total_count":1}]}}},
+  {"id":298,"chat_id":-1001,"date":298,"media_album_id":"0","content":{"@type":"messageText","text":{"text":"Synthetic missing metrics"}},"interaction_info":null},
+  {"id":297,"chat_id":-1001,"date":297,"media_album_id":"0","content":{"@type":"messageDocument","caption":{"text":"Synthetic zero metrics"}},"interaction_info":{"view_count":0,"forward_count":0,"reply_info":{"reply_count":0},"reactions":{"reactions":[]}}},
+  {"id":296,"chat_id":-1002,"date":296,"media_album_id":"9223372036854775806","content":{"@type":"messageUnsupportedFutureType"},"interaction_info":null}
+]

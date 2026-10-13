@@ -25,3 +25,15 @@ dist-ssr
 
 #tdlib
 Release/*
+*.dll
+*.lib
+*.exp
+.env
+.env.*
+!.env.example
+/tdlib/
+*.session
+*.sqlite
+*.sqlite-*
+*.db
+*.db-*

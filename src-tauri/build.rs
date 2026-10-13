@@ -11,6 +11,10 @@ const RUNTIME_DLLS: &[&str] = &[
 ];
 
 fn main() {
+    println!("cargo:rerun-if-env-changed=TMSGPICKER_TDLIB_DIR");
+    if env::var_os("CARGO_FEATURE_DESKTOP").is_none() {
+        return;
+    }
     tauri_build::build();
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
@@ -27,12 +31,25 @@ fn main() {
     let repo_root = manifest_dir.parent().unwrap();
 
     // Existing local TDLib build artifacts
-    let native_dir = repo_root.join("Release");
+    let native_dir = env::var_os("TMSGPICKER_TDLIB_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| {
+            let direct = repo_root.join("Release");
+            if direct.join("tdjson.lib").is_file() {
+                direct
+            } else {
+                direct.join("Release")
+            }
+        });
 
     // Check required native files
     for filename in RUNTIME_DLLS.iter().copied().chain(["tdjson.lib"]) {
         let path = native_dir.join(filename);
-        assert!(path.is_file(), "Missing native file: {}", path.display());
+        assert!(
+            path.is_file(),
+            "Missing native file: {}. Set TMSGPICKER_TDLIB_DIR to the Windows x64 TDLib directory (or use --no-default-features for offline core tests).",
+            path.display()
+        );
         println!("cargo:rerun-if-changed={}", path.display());
     }
 
@@ -51,6 +68,9 @@ fn main() {
     // Copy runtime DLLs beside the executable
     for filename in RUNTIME_DLLS {
         copy_if_changed(&native_dir.join(filename), &profile_dir.join(filename));
+        let deps = profile_dir.join("deps");
+        fs::create_dir_all(&deps).expect("Cannot create DLL staging directory");
+        copy_if_changed(&native_dir.join(filename), &deps.join(filename));
     }
 }
 

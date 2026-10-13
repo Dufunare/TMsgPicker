@@ -13,12 +13,15 @@
     "windows": [
       {
         "title": "tmsgpicker",
-        "width": 800,
-        "height": 600
+        "width": 1440,
+        "height": 900,
+        "minWidth": 800,
+        "minHeight": 600
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; script-src 'self'",
+      "devCsp": "default-src 'self'; connect-src ipc: http://ipc.localhost ws://localhost:1420 ws://127.0.0.1:1420; img-src 'self' asset: http://asset.localhost data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
     }
   },
   "bundle": {

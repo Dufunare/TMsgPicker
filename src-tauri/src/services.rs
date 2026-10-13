@@ -1,0 +1,386 @@
+use crate::{
+    core::MessageKey,
+    gateway::{Result, TelegramGateway, id},
+};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::Path,
+    sync::atomic::AtomicBool,
+};
+
+#[derive(Deserialize)]
+pub struct ProxyConfig {
+    pub server: String,
+    pub port: u16,
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+}
+#[derive(Deserialize)]
+pub struct ConnectConfig {
+    pub api_id: Option<i32>,
+    pub api_hash: Option<String>,
+    pub passphrase: String,
+    pub proxy: Option<ProxyConfig>,
+}
+pub struct AuthService;
+impl AuthService {
+    pub fn initialize(g: &dyn TelegramGateway, c: ConnectConfig, root: &Path) -> Result<()> {
+        let cancel = AtomicBool::new(false);
+        let api_id = c
+            .api_id
+            .or_else(|| std::env::var("TMSGPICKER_API_ID").ok()?.parse().ok())
+            .filter(|n| *n > 0)
+            .ok_or("Enter API ID or set TMSGPICKER_API_ID")?;
+        let api_hash = c
+            .api_hash
+            .filter(|s| !s.is_empty())
+            .or_else(|| std::env::var("TMSGPICKER_API_HASH").ok())
+            .filter(|s| !s.is_empty())
+            .ok_or("Enter API hash or set TMSGPICKER_API_HASH")?;
+        if c.passphrase.is_empty() {
+            return Err(
+                "Enter the existing database passphrase (or choose one for the first login)".into(),
+            );
+        }
+        std::fs::create_dir_all(root.join("db"))
+            .map_err(|_| "Cannot create app database directory")?;
+        std::fs::create_dir_all(root.join("files"))
+            .map_err(|_| "Cannot create app files directory")?;
+        // Proxy success is awaited before parameters trigger any authorization network traffic.
+        if let Some(p) = c.proxy {
+            if p.server.trim().is_empty() || p.port == 0 {
+                return Err("Invalid SOCKS5 host/port".into());
+            }
+            g.request(json!({"@type":"addProxy","proxy":{"@type":"proxy","server":p.server,"port":p.port,"type":{"@type":"proxyTypeSocks5","username":p.username,"password":p.password}},"enable":true,"comment":"TMsgPicker"}),&cancel)
+                .map_err(|e|format!("SOCKS5 setup failed before TDLib initialization: {e}"))?;
+        } else {
+            g.request(json!({"@type":"disableProxy"}), &cancel)
+                .map_err(|e| {
+                    format!("Disabling the saved proxy failed before TDLib initialization: {e}")
+                })?;
+        }
+        g.request(json!({"@type":"setTdlibParameters","use_test_dc":false,"database_directory":root.join("db").to_string_lossy(),"files_directory":root.join("files").to_string_lossy(),"database_encryption_key":STANDARD.encode(c.passphrase.as_bytes()),"use_file_database":true,"use_chat_info_database":true,"use_message_database":true,"use_secret_chats":false,"api_id":api_id,"api_hash":api_hash,"system_language_code":"zh-CN","device_model":"TMsgPicker Desktop","system_version":"Windows","application_version":"0.1.0"}),&cancel)
+            .map_err(|e|format!("TDLib initialization failed after proxy configuration; check API configuration and database passphrase: {e}"))?;
+        Ok(())
+    }
+    pub fn submit(g: &dyn TelegramGateway, state: &str, value: String) -> Result<()> {
+        let body = match state {
+            "authorizationStateWaitPhoneNumber" => {
+                json!({"@type":"setAuthenticationPhoneNumber","phone_number":value,"settings":null})
+            }
+            "authorizationStateWaitCode" => json!({"@type":"checkAuthenticationCode","code":value}),
+            "authorizationStateWaitPassword" => {
+                json!({"@type":"checkAuthenticationPassword","password":value})
+            }
+            "authorizationStateWaitEmailAddress" => {
+                json!({"@type":"setAuthenticationEmailAddress","email_address":value})
+            }
+            "authorizationStateWaitEmailCode" => {
+                json!({"@type":"checkAuthenticationEmailCode","code":{"@type":"emailAddressAuthenticationCode","code":value}})
+            }
+            _ => {
+                return Err(format!(
+                    "Authorization step {state} requires Telegram official client or restarting connection"
+                ));
+            }
+        };
+        g.request(body, &AtomicBool::new(false))?;
+        Ok(())
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct Chat {
+    pub id: String,
+    pub title: String,
+    pub kind: String,
+}
+pub struct ChatService;
+impl ChatService {
+    pub fn describe(v: Value) -> Result<Chat> {
+        Ok(Chat {
+            id: v["id"].as_i64().ok_or("Invalid chat ID")?.to_string(),
+            title: v["title"].as_str().unwrap_or("Untitled").into(),
+            kind: v["type"]["@type"].as_str().unwrap_or("unknown").into(),
+        })
+    }
+    pub fn list(g: &dyn TelegramGateway, search: &str) -> Result<Vec<Chat>> {
+        let c = AtomicBool::new(false);
+        if search.trim().is_empty()
+            && let Err(e) = g.request(
+                json!({"@type":"loadChats","chat_list":{"@type":"chatListMain"},"limit":100}),
+                &c,
+            )
+            && !e.contains("error 404")
+        {
+            return Err(e);
+        }
+        let v = g.request(
+            if search.trim().is_empty() {
+                json!({"@type":"getChats","chat_list":{"@type":"chatListMain"},"limit":100})
+            } else {
+                json!({"@type":"searchChats","query":search,"limit":100})
+            },
+            &c,
+        )?;
+        let mut out = Vec::new();
+        for cid in v["chat_ids"].as_array().ok_or("Invalid chats response")? {
+            let v = g.request(json!({"@type":"getChat","chat_id":cid}), &c)?;
+            out.push(Self::describe(v)?);
+        }
+        Ok(out)
+    }
+    pub fn public(g: &dyn TelegramGateway, username: &str) -> Result<Chat> {
+        Self::describe(g.request(
+            json!({"@type":"searchPublicChat","username":username.trim().trim_start_matches('@')}),
+            &AtomicBool::new(false),
+        )?)
+    }
+    pub fn saved(g: &dyn TelegramGateway) -> Result<Chat> {
+        let c = AtomicBool::new(false);
+        let me = g.request(json!({"@type":"getMe"}), &c)?;
+        Self::describe(g.request(
+            json!({"@type":"createPrivateChat","user_id":me["id"],"force":false}),
+            &c,
+        )?)
+    }
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ActionItem {
+    pub source: MessageKey,
+    pub state: String,
+    pub detail: String,
+    pub sent_id: Option<String>,
+}
+#[derive(Clone, Serialize, Deserialize)]
+pub struct ForwardReport {
+    pub items: Vec<ActionItem>,
+}
+pub struct ActionService;
+impl ActionService {
+    fn check_message(g: &dyn TelegramGateway, perms: &Value, source: i64, mid: i64) -> Result<()> {
+        let c = AtomicBool::new(false);
+        let p = g.request(
+            json!({"@type":"getMessageProperties","chat_id":source,"message_id":mid}),
+            &c,
+        )?;
+        if p["can_be_forwarded"] != true {
+            return Err("Protected content or forwarding forbidden".into());
+        }
+        let m = g.request(
+            json!({"@type":"getMessage","chat_id":source,"message_id":mid}),
+            &c,
+        )?;
+        let field = match m["content"]["@type"].as_str().unwrap_or("") {
+            "messageText" => "can_send_basic_messages",
+            "messagePhoto" => "can_send_photos",
+            "messageVideo" => "can_send_videos",
+            "messageDocument" => "can_send_documents",
+            "messageAudio" => "can_send_audios",
+            "messageVoiceNote" => "can_send_voice_notes",
+            "messageVideoNote" => "can_send_video_notes",
+            "messagePoll" => "can_send_polls",
+            _ => "can_send_other_messages",
+        };
+        if perms["all"] != true && perms[field] != true {
+            return Err("Target does not permit this content type".into());
+        }
+        Ok(())
+    }
+    pub fn preview(
+        g: &dyn TelegramGateway,
+        target: &str,
+        keys: &[MessageKey],
+    ) -> Result<ForwardReport> {
+        if keys.is_empty() || keys.len() > 5000 {
+            return Err("Select 1–5000 messages".into());
+        }
+        let perms = Self::target_permissions(g, id(target)?)?;
+        let mut items = Vec::new();
+        let mut seen = BTreeSet::new();
+        for k in keys {
+            if !seen.insert(k.clone()) {
+                continue;
+            }
+            let check = Self::check_message(g, &perms, id(&k.chat_id)?, id(&k.message_id)?);
+            let (state, detail) = match check {
+                Ok(()) => (
+                    "Allowed",
+                    "Permissions checked; will recheck on confirmation".into(),
+                ),
+                Err(e) => ("Rejected", e),
+            };
+            items.push(ActionItem {
+                source: k.clone(),
+                state: state.into(),
+                detail,
+                sent_id: None,
+            });
+        }
+        Ok(ForwardReport { items })
+    }
+    pub fn link(g: &dyn TelegramGateway, k: &MessageKey, album: bool) -> Result<String> {
+        let c = AtomicBool::new(false);
+        let chat = id(&k.chat_id)?;
+        let mid = id(&k.message_id)?;
+        let p = g.request(
+            json!({"@type":"getMessageProperties","chat_id":chat,"message_id":mid}),
+            &c,
+        )?;
+        if p["can_get_link"] != true {
+            return Err("Telegram does not allow a link for this message".into());
+        }
+        let v=g.request(json!({"@type":"getMessageLink","chat_id":chat,"message_id":mid,"media_timestamp":0,"for_album":album,"in_message_thread":false,"checklist_task_id":0,"poll_option_id":""}),&c)?;
+        let link = v["link"].as_str().ok_or("Telegram returned no link")?;
+        if !link.starts_with("https://t.me/") && !link.starts_with("tg://") {
+            return Err("Unexpected Telegram link scheme".into());
+        }
+        Ok(link.into())
+    }
+    fn target_permissions(g: &dyn TelegramGateway, target: i64) -> Result<Value> {
+        let c = AtomicBool::new(false);
+        let chat = g.request(json!({"@type":"getChat","chat_id":target}), &c)?;
+        if chat["type"]["@type"] == "chatTypePrivate" {
+            let user = g.request(
+                json!({"@type":"getUser","user_id":chat["type"]["user_id"]}),
+                &c,
+            )?;
+            if user["type"]["@type"] == "userTypeDeleted" {
+                return Err("Target user is deleted".into());
+            }
+            return Ok(json!({"all":true}));
+        }
+        let (method, key) = match chat["type"]["@type"].as_str() {
+            Some("chatTypeSupergroup") => ("getSupergroup", "supergroup_id"),
+            Some("chatTypeBasicGroup") => ("getBasicGroup", "basic_group_id"),
+            _ => return Err("Unsupported target chat type".into()),
+        };
+        let mut body = json!({"@type":method});
+        body[key] = chat["type"][key].clone();
+        let group = g.request(body, &c)?;
+        let status = &group["status"];
+        let admin = status["@type"] == "chatMemberStatusAdministrator";
+        let owner = status["@type"] == "chatMemberStatusCreator";
+        if owner && status["is_member"] != false
+            || admin
+                && (group["is_channel"] != true || status["rights"]["can_post_messages"] == true)
+        {
+            return Ok(json!({"all":true}));
+        }
+        if group["is_channel"] == true {
+            return Err("Target channel requires posting rights".into());
+        }
+        match status["@type"].as_str() {
+            Some("chatMemberStatusMember") => Ok(chat["permissions"].clone()),
+            Some("chatMemberStatusRestricted") if status["is_member"] == true => {
+                let mut p = chat["permissions"].clone();
+                if let Some(obj) = p.as_object_mut() {
+                    for (k, v) in obj {
+                        if k.starts_with("can_send_") {
+                            *v = json!(
+                                v == &Value::Bool(true)
+                                    && status["permissions"][k.as_str()] == true
+                            );
+                        }
+                    }
+                }
+                Ok(p)
+            }
+            _ => Err("No write membership in target chat".into()),
+        }
+    }
+    pub fn forward(
+        g: &dyn TelegramGateway,
+        target: &str,
+        keys: &[MessageKey],
+    ) -> Result<ForwardReport> {
+        if keys.is_empty() || keys.len() > 5000 {
+            return Err("Select 1–5000 messages".into());
+        }
+        let target = id(target)?;
+        let perms = Self::target_permissions(g, target)?;
+        let c = AtomicBool::new(false);
+        let mut report = ForwardReport { items: Vec::new() };
+        let mut groups: BTreeMap<i64, BTreeSet<i64>> = BTreeMap::new();
+        for k in keys {
+            groups
+                .entry(id(&k.chat_id)?)
+                .or_default()
+                .insert(id(&k.message_id)?);
+        }
+        for (source, ids) in groups {
+            let mut allowed = Vec::new();
+            for mid in ids {
+                let key = MessageKey {
+                    chat_id: source.to_string(),
+                    message_id: mid.to_string(),
+                };
+                let check = Self::check_message(g, &perms, source, mid);
+                match check {
+                    Ok(()) => allowed.push(mid),
+                    Err(e) => report.items.push(ActionItem {
+                        source: key,
+                        state: "Rejected".into(),
+                        detail: e,
+                        sent_id: None,
+                    }),
+                }
+            }
+            for batch in allowed.chunks(100) {
+                let r=g.request(json!({"@type":"forwardMessages","chat_id":target,"from_chat_id":source,"message_ids":batch,"topic_id":null,"message_thread_id":0,"options":{"@type":"messageSendOptions"},"send_copy":false,"remove_caption":false}),&c);
+                for (i, mid) in batch.iter().enumerate() {
+                    let (state, detail, sent_id) = match &r {
+                        Err(e) => ("Failed", e.clone(), None),
+                        Ok(v) => match v["messages"]
+                            .as_array()
+                            .and_then(|a| a.get(i))
+                            .filter(|m| !m.is_null())
+                        {
+                            None => (
+                                "Failed",
+                                "Telegram returned null or omitted this message".into(),
+                                None,
+                            ),
+                            Some(m) if m["id"].as_i64().is_none() => (
+                                "Failed",
+                                "Telegram returned a malformed message without an ID".into(),
+                                None,
+                            ),
+                            Some(m)
+                                if m["sending_state"]["@type"] == "messageSendingStateFailed" =>
+                            {
+                                ("Failed", "Telegram rejected sending".into(), None)
+                            }
+                            Some(m) => {
+                                let pending = !m["sending_state"].is_null();
+                                (
+                                    if pending { "Pending" } else { "Sent" },
+                                    if pending {
+                                        "Accepted by TDLib; await send update".into()
+                                    } else {
+                                        "Sent".into()
+                                    },
+                                    m["id"].as_i64().map(|n| n.to_string()),
+                                )
+                            }
+                        },
+                    };
+                    report.items.push(ActionItem {
+                        source: MessageKey {
+                            chat_id: source.to_string(),
+                            message_id: mid.to_string(),
+                        },
+                        state: state.into(),
+                        detail,
+                        sent_id,
+                    });
+                }
+            }
+        }
+        Ok(report)
+    }
+}
