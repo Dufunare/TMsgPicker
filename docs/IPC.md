@@ -9,7 +9,7 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 | 命令 | 参数 | 返回 |
 |---|---|---|
 | `connection_status` | 无 | `{auth_state,connection_state,detail}` |
-| `connect` | `{config:{api_id?,api_hash?,passphrase,proxy?}}` | 初始化完成；代理配置先于 TDLib 参数 |
+| `connect` | `{config:{api_id?,api_hash?,passphrase,proxy?}}` | 按序提交代理请求和 TDLib 参数，然后等待两者响应；不等待代理响应后才提交参数 |
 | `auth_submit` | `{value}` | 按当前授权状态提交手机号/代码/密码/邮箱 |
 | `disconnect` | 无 | 取消查询，close 并等待 authorizationStateClosed |
 | `chats` | `{search}` | `Chat[]`；空字符串加载列表，非空搜索已知聊天 |
@@ -22,6 +22,8 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 | `forward_selected` | `{target,postKeys,runId,confirmed:true}` | `ForwardReport`；校验选择属于最近查询结果，再重新检查权限 |
 
 `ProxyConfig = {server,port,username,password}`；`port` 为 1–65535。没有代理时显式停用 TDLib 持久化旧代理。密码/API 凭据只在初始化/授权的内存请求中存在，不使用浏览器 storage。
+
+`TelegramGateway.request_batch` 在等待前按序提交所有请求，返回值保持提交顺序；先等待最后的参数请求，以便参数错误立即返回并清理其余 pending。TDLib 将初始化前的 addProxy/disableProxy 排队，因此不可用单条阻塞 request 先等待代理确认。代理请求成功仅表示设置被接受，不表示网络连接成功。
 
 ## 查询 DTO
 

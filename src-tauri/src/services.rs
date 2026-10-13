@@ -51,21 +51,26 @@ impl AuthService {
             .map_err(|_| "Cannot create app database directory")?;
         std::fs::create_dir_all(root.join("files"))
             .map_err(|_| "Cannot create app files directory")?;
-        // Proxy success is awaited before parameters trigger any authorization network traffic.
-        if let Some(p) = c.proxy {
+        // Pre-authentication is not pre-initialization: TDLib queues proxy requests
+        // until setTdlibParameters. Send the proxy first, then parameters, then await both.
+        let proxy_request = if let Some(p) = c.proxy {
             if p.server.trim().is_empty() || p.port == 0 {
                 return Err("Invalid SOCKS5 host/port".into());
             }
-            g.request(json!({"@type":"addProxy","proxy":{"@type":"proxy","server":p.server,"port":p.port,"type":{"@type":"proxyTypeSocks5","username":p.username,"password":p.password}},"enable":true,"comment":"TMsgPicker"}),&cancel)
-                .map_err(|e|format!("SOCKS5 setup failed before TDLib initialization: {e}"))?;
+            json!({"@type":"addProxy","proxy":{"@type":"proxy","server":p.server,"port":p.port,"type":{"@type":"proxyTypeSocks5","username":p.username,"password":p.password}},"enable":true,"comment":"TMsgPicker"})
         } else {
-            g.request(json!({"@type":"disableProxy"}), &cancel)
-                .map_err(|e| {
-                    format!("Disabling the saved proxy failed before TDLib initialization: {e}")
-                })?;
+            json!({"@type":"disableProxy"})
+        };
+        let parameters = json!({"@type":"setTdlibParameters","use_test_dc":false,"database_directory":root.join("db").to_string_lossy(),"files_directory":root.join("files").to_string_lossy(),"database_encryption_key":STANDARD.encode(c.passphrase.as_bytes()),"use_file_database":true,"use_chat_info_database":true,"use_message_database":true,"use_secret_chats":false,"api_id":api_id,"api_hash":api_hash,"system_language_code":"zh-CN","device_model":"TMsgPicker Desktop","system_version":"Windows","application_version":"0.1.0"});
+        let responses = g
+            .request_batch(vec![proxy_request, parameters], &cancel)
+            .map_err(|e| format!("TDLib bootstrap failed (proxy queued before parameters): {e}"))?;
+        if responses.len() != 2
+            || responses[1]["@type"] != "ok"
+            || !matches!(responses[0]["@type"].as_str(), Some("addedProxy" | "ok"))
+        {
+            return Err("TDLib returned an unexpected proxy/initialization response".into());
         }
-        g.request(json!({"@type":"setTdlibParameters","use_test_dc":false,"database_directory":root.join("db").to_string_lossy(),"files_directory":root.join("files").to_string_lossy(),"database_encryption_key":STANDARD.encode(c.passphrase.as_bytes()),"use_file_database":true,"use_chat_info_database":true,"use_message_database":true,"use_secret_chats":false,"api_id":api_id,"api_hash":api_hash,"system_language_code":"zh-CN","device_model":"TMsgPicker Desktop","system_version":"Windows","application_version":"0.1.0"}),&cancel)
-            .map_err(|e|format!("TDLib initialization failed after proxy configuration; check API configuration and database passphrase: {e}"))?;
         Ok(())
     }
     pub fn submit(g: &dyn TelegramGateway, state: &str, value: String) -> Result<()> {

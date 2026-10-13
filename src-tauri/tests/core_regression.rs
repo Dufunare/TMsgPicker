@@ -27,6 +27,12 @@ impl MockTelegramGateway {
     }
 }
 impl TelegramGateway for MockTelegramGateway {
+    fn request_batch(&self, requests: Vec<Value>, cancel: &AtomicBool) -> Result<Vec<Value>> {
+        requests
+            .into_iter()
+            .map(|body| self.request(body, cancel))
+            .collect()
+    }
     fn request(&self, v: Value, cancel: &AtomicBool) -> Result<Value> {
         self.requests.lock().unwrap().push(v.clone());
         match v["@type"].as_str().unwrap() {
@@ -88,6 +94,12 @@ struct PolicyGateway {
     response: Option<Result<Value>>,
 }
 impl TelegramGateway for PolicyGateway {
+    fn request_batch(&self, requests: Vec<Value>, cancel: &AtomicBool) -> Result<Vec<Value>> {
+        requests
+            .into_iter()
+            .map(|body| self.request(body, cancel))
+            .collect()
+    }
     fn request(&self, v: Value, cancel: &AtomicBool) -> Result<Value> {
         match v["@type"].as_str().unwrap() {
             "getChat" => {
@@ -605,30 +617,85 @@ fn forwarding_preview_never_sends_and_lists_rejections() {
             .all(|r| r["@type"] != "forwardMessages")
     );
 }
+struct BootstrapGateway {
+    requests: Mutex<Vec<Value>>,
+    proxy: bool,
+    failure: Option<&'static str>,
+}
+impl TelegramGateway for BootstrapGateway {
+    fn request(&self, _: Value, _: &AtomicBool) -> Result<Value> {
+        Err("Proxy cannot complete before parameters; bootstrap must submit a batch".into())
+    }
+    fn request_batch(&self, requests: Vec<Value>, _: &AtomicBool) -> Result<Vec<Value>> {
+        assert_eq!(requests.len(), 2);
+        assert_eq!(
+            requests[0]["@type"],
+            if self.proxy {
+                "addProxy"
+            } else {
+                "disableProxy"
+            }
+        );
+        assert_eq!(requests[1]["@type"], "setTdlibParameters");
+        *self.requests.lock().unwrap() = requests;
+        if let Some(error) = self.failure {
+            return Err(error.into());
+        }
+        Ok(vec![
+            if self.proxy {
+                json!({"@type":"addedProxy"})
+            } else {
+                json!({"@type":"ok"})
+            },
+            json!({"@type":"ok"}),
+        ])
+    }
+}
 #[test]
-fn proxy_initialized_before_parameters_without_logging_secrets() {
-    let g = MockTelegramGateway::pages(vec![]);
-    let root =
-        std::env::temp_dir().join(format!("tmsgpicker-synthetic-test-{}", std::process::id()));
-    let config = ConnectConfig {
-        api_id: Some(1),
-        api_hash: Some("synthetic-not-a-credential".into()),
-        passphrase: "synthetic-passphrase".into(),
-        proxy: Some(ProxyConfig {
-            server: "localhost".into(),
-            port: 9999,
-            username: "".into(),
-            password: "".into(),
-        }),
-    };
-    AuthService::initialize(&g, config, &root).unwrap();
-    let r = g.requests.lock().unwrap();
-    assert_eq!(r[0]["@type"], "addProxy");
-    assert_eq!(r[0]["proxy"]["port"], 9999);
-    assert_eq!(r[1]["@type"], "setTdlibParameters");
-    assert_ne!(r[1]["database_encryption_key"], "synthetic-passphrase");
-    // Remove only the uniquely named synthetic test folders we just created.
-    std::fs::remove_dir(root.join("db")).unwrap();
-    std::fs::remove_dir(root.join("files")).unwrap();
-    std::fs::remove_dir(root).unwrap();
+fn proxy_and_no_proxy_bootstrap_submit_parameters_without_waiting_for_proxy() {
+    for (proxy, failure) in [
+        (true, None),
+        (false, None),
+        (true, Some("setTdlibParameters: TDLib error 400")),
+        (false, Some("disableProxy: TDLib error 500")),
+    ] {
+        let g = BootstrapGateway {
+            requests: Mutex::new(Vec::new()),
+            proxy,
+            failure,
+        };
+        let root = std::env::temp_dir().join(format!(
+            "tmsgpicker-bootstrap-test-{}-{proxy}-{}",
+            std::process::id(),
+            failure.is_some()
+        ));
+        let config = ConnectConfig {
+            api_id: Some(1),
+            api_hash: Some("synthetic-not-a-credential".into()),
+            passphrase: "synthetic-passphrase".into(),
+            proxy: proxy.then_some(ProxyConfig {
+                server: "localhost".into(),
+                port: 9999,
+                username: "".into(),
+                password: "".into(),
+            }),
+        };
+        let result = AuthService::initialize(&g, config, &root);
+        if let Some(error) = failure {
+            assert!(result.unwrap_err().contains(error));
+        } else {
+            result.unwrap();
+        }
+        let r = g.requests.lock().unwrap();
+        if proxy {
+            assert_eq!(r[0]["@type"], "addProxy");
+            assert_eq!(r[0]["proxy"]["port"], 9999);
+        }
+        assert_eq!(r[1]["@type"], "setTdlibParameters");
+        assert_ne!(r[1]["database_encryption_key"], "synthetic-passphrase");
+        // Remove only the uniquely named synthetic test folders we just created.
+        std::fs::remove_dir(root.join("db")).unwrap();
+        std::fs::remove_dir(root.join("files")).unwrap();
+        std::fs::remove_dir(root).unwrap();
+    }
 }

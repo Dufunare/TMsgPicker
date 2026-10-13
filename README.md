@@ -22,7 +22,9 @@ pnpm.cmd tauri dev
 
 首次启动选定一个非空数据库密码。后续必须输入相同密码。数据库和 Session 使用 `%LOCALAPPDATA%\com.funare.tmsgpicker\tdlib\db`，文件目录为同级 `files`，与现有 CLI auth 工具一致。密码经 Base64 编码传入 TDLib 的 bytes 字段，**Base64 本身不是加密**；由 TDLib 使用该密钥加密数据库。密码不持久化到源码、前端 storage 或配置文件，因此每次启动需重新输入数据库密码。
 
-SOCKS5 的地址、端口和可选用户名/密码在界面配置。代理响应成功后才提交 `setTdlibParameters`；不启用代理时显式 `disableProxy`，避免 Session 中旧代理仍生效。修改代理/API 配置前先安全断开。手机号、验证码、2FA 和邮箱授权由界面提交；额外授权步骤显示明确提示，不自动重试验证码。
+SOCKS5 的地址、端口和可选用户名/密码在界面配置。使用 Clash 时，服务器只填 `127.0.0.1`，端口填 Clash 实际启用的 SOCKS5 或 Mixed 端口（例如本机配置为 7897）；未设置代理认证时用户名/密码留空。TDLib 不自动跟随 Clash 的系统 HTTP 代理。
+
+初始化顺序：先发送 `addProxy(enable=true)`，或没有代理时发送 `disableProxy`，随后立即发送 `setTdlibParameters`，两条都发出后再等待响应。**不能先等代理响应再提交参数**：代理 API 可在授权前调用，但在 `authorizationStateWaitTdlibParameters` 阶段会排队，等待参数初始化。初始化失败先报告 `setTdlibParameters` 错误并清理 pending，不再被代理请求阻塞 45 秒；代理配置成功也不表示 Telegram 已连通，应查看连接状态。修改代理/API 配置前先安全断开。手机号、验证码、2FA 和邮箱授权由界面提交；额外授权步骤显示明确提示，不自动重试验证码。
 
 ## 查询语义
 

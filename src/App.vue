@@ -27,7 +27,7 @@ async function action(fn: () => Promise<void>) { error.value=''; busy.value=true
 async function connect() {
   await action(async () => {
     await invoke('connect', { config: { api_id: apiId.value ? Number(apiId.value) : null, api_hash: apiHash.value || null, passphrase: passphrase.value, proxy: proxyEnabled.value ? { server: proxyHost.value, port: proxyPort.value, username: proxyUser.value, password: proxyPassword.value } : null } });
-    notice.value = '配置已提交；代理设置已在初始化前完成。';
+    notice.value = 'TDLib 已接受代理设置和初始化参数；Telegram 连通性请查看连接状态。';
   });
   apiHash.value=''; passphrase.value=''; proxyPassword.value='';
 }
@@ -95,7 +95,7 @@ onUnmounted(()=>unlisteners.forEach(fn=>fn()));
         <label>API hash<input v-model="apiHash" type="password" placeholder="或使用环境变量" autocomplete="off"></label>
         <label>本地数据库密码<input v-model="passphrase" type="password" required autocomplete="off" placeholder="与现有 Session 密码一致"></label>
         <label class="check"><input v-model="proxyEnabled" type="checkbox">启用 SOCKS5</label>
-        <template v-if="proxyEnabled"><label>服务器<input v-model="proxyHost" required></label><label>端口<input v-model.number="proxyPort" type="number" min="1" max="65535" required></label><label>代理用户名<input v-model="proxyUser" autocomplete="off"></label><label>代理密码<input v-model="proxyPassword" type="password" autocomplete="off"></label></template>
+        <template v-if="proxyEnabled"><label>服务器（不含端口）<input v-model="proxyHost" placeholder="例如 127.0.0.1" required></label><label>Clash SOCKS5 / Mixed 端口<input v-model.number="proxyPort" type="number" min="1" max="65535" required></label><label>代理用户名<input v-model="proxyUser" autocomplete="off"></label><label>代理密码<input v-model="proxyPassword" type="password" autocomplete="off"></label></template>
         <button :disabled="busy || scanning || forwarding" class="primary">连接 / 初始化</button><button type="button" :disabled="busy || forwarding || connection.auth_state==='Disconnected'" @click="disconnect">安全断开</button>
       </form>
       <form v-if="authLabel" @submit.prevent="submitAuth" class="auth-step"><label>{{ authLabel }}<input v-model="authValue" :type="connection.auth_state==='authorizationStateWaitPhoneNumber' || connection.auth_state==='authorizationStateWaitEmailAddress' ? 'text' : 'password'" required autocomplete="off"></label><button :disabled="busy" class="primary">提交授权</button></form>

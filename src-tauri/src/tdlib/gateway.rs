@@ -78,6 +78,28 @@ impl Router {
     }
 }
 static ACTIVE: AtomicBool = AtomicBool::new(false);
+struct PendingRequest {
+    tag: String,
+    router: Arc<Router>,
+    receiver: Option<mpsc::Receiver<Result<Value>>>,
+    deadline: Instant,
+}
+impl PendingRequest {
+    fn wait(mut self, cancel: &AtomicBool) -> Result<Value> {
+        let receiver = self.receiver.take().unwrap();
+        self.router.wait(
+            &self.tag,
+            receiver,
+            cancel,
+            self.deadline.saturating_duration_since(Instant::now()),
+        )
+    }
+}
+impl Drop for PendingRequest {
+    fn drop(&mut self) {
+        self.router.remove(&self.tag);
+    }
+}
 pub struct TdlibGateway {
     client: i32,
     router: Arc<Router>,
@@ -86,6 +108,25 @@ pub struct TdlibGateway {
     worker: Mutex<Option<thread::JoinHandle<()>>>,
 }
 impl TdlibGateway {
+    fn enqueue(&self, mut body: Value) -> Result<PendingRequest> {
+        if *self.closed.0.lock().unwrap() {
+            return Err("TDLib is closed".into());
+        }
+        let tag = self.sequence.fetch_add(1, Ordering::Relaxed).to_string();
+        body["@extra"] = json!(tag);
+        let request = CString::new(body.to_string()).map_err(|_| "Invalid TDLib request")?;
+        let (tx, rx) = mpsc::channel();
+        self.router.insert(tag.clone(), tx);
+        unsafe {
+            ffi::td_send(self.client, request.as_ptr());
+        }
+        Ok(PendingRequest {
+            tag,
+            router: self.router.clone(),
+            receiver: Some(rx),
+            deadline: Instant::now() + Duration::from_secs(45),
+        })
+    }
     pub fn new(on_update: impl Fn(Value) + Send + 'static) -> Result<Arc<Self>> {
         if ACTIVE
             .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
@@ -171,22 +212,30 @@ impl TdlibGateway {
     }
 }
 impl TelegramGateway for TdlibGateway {
-    fn request(&self, mut body: Value, cancel: &AtomicBool) -> Result<Value> {
-        if *self.closed.0.lock().unwrap() {
-            return Err("TDLib is closed".into());
-        }
+    fn request(&self, body: Value, cancel: &AtomicBool) -> Result<Value> {
         if cancel.load(Ordering::Relaxed) {
             return Err("Cancelled".into());
         }
-        let tag = self.sequence.fetch_add(1, Ordering::Relaxed).to_string();
-        body["@extra"] = json!(tag);
-        let request = CString::new(body.to_string()).map_err(|_| "Invalid TDLib request")?;
-        let (tx, rx) = mpsc::channel();
-        self.router.insert(tag.clone(), tx);
-        unsafe {
-            ffi::td_send(self.client, request.as_ptr());
+        self.enqueue(body)?.wait(cancel)
+    }
+    fn request_batch(&self, requests: Vec<Value>, cancel: &AtomicBool) -> Result<Vec<Value>> {
+        let mut pending = Vec::new();
+        for body in requests {
+            if cancel.load(Ordering::Relaxed) {
+                return Err("Cancelled".into());
+            }
+            let method = body["@type"]
+                .as_str()
+                .unwrap_or("unknown request")
+                .to_string();
+            pending.push((method, self.enqueue(body)?));
         }
-        self.router.wait(&tag, rx, cancel, Duration::from_secs(45))
+        let mut responses = Vec::new();
+        while let Some((method, request)) = pending.pop() {
+            responses.push(request.wait(cancel).map_err(|e| format!("{method}: {e}"))?);
+        }
+        responses.reverse();
+        Ok(responses)
     }
 }
 
@@ -234,6 +283,38 @@ mod tests {
             .request(json!({"@type":"getAuthorizationState"}), &c)
             .unwrap();
         assert_eq!(auth["@type"], "authorizationStateWaitTdlibParameters");
+        // Regression: both proxy APIs are queued while parameters are missing.
+        // No DB directory or valid API credentials are submitted in this test.
+        for proxy in [
+            json!({"@type":"disableProxy"}),
+            json!({"@type":"addProxy","proxy":{"@type":"proxy","server":"127.0.0.1","port":7897,"type":{"@type":"proxyTypeSocks5","username":"","password":""}},"enable":true}),
+        ] {
+            let mut waiting = g.enqueue(proxy.clone()).unwrap();
+            let response = g.router.wait(
+                &waiting.tag,
+                waiting.receiver.take().unwrap(),
+                &c,
+                Duration::from_millis(40),
+            );
+            assert!(response.unwrap_err().contains("timed out"));
+            drop(waiting);
+            assert_eq!(
+                g.request(json!({"@type":"getAuthorizationState"}), &c)
+                    .unwrap()["@type"],
+                "authorizationStateWaitTdlibParameters"
+            );
+            let start = Instant::now();
+            let error = g
+                .request_batch(
+                    vec![proxy, json!({"@type":"setTdlibParameters","api_id":0})],
+                    &c,
+                )
+                .unwrap_err();
+            assert!(error.contains("setTdlibParameters"), "{error}");
+            assert!(!error.contains("timed out"), "{error}");
+            assert!(start.elapsed() < Duration::from_secs(5));
+            assert!(g.router.pending.lock().unwrap().is_empty());
+        }
         let handles: Vec<_> = (0..4)
             .map(|_| {
                 let g = g.clone();

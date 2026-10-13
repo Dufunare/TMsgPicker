@@ -27,7 +27,7 @@
 
 | 规范范围 | 已实现 / 自动验证 | 仍待本机手工验收 |
 |---|---|---|
-| Native / 授权 | 原生 FFI ABI、唯一接收器、并发路由、取消/超时清理、错误脱敏、Closed 后停止并可重建；手机号/代码/2FA/邮箱 UI；代理响应先于 TDLib 参数 | 真实 API 初始化、SOCKS5 连通、第一次账号登录、已有加密 Session 复用及 GUI 退出 |
+| Native / 授权 | 原生 FFI ABI、唯一接收器、并发路由、取消/超时清理、错误脱敏、Closed 后停止并可重建；手机号/代码/2FA/邮箱 UI；代理请求先发送，参数不等待代理响应便提交，再等待两者确认 | 真实 API 初始化、SOCKS5 连通、第一次账号登录、已有加密 Session 复用及 GUI 退出 |
 | Pagination | 先 1 后 49 累计 50、短页继续、重复游标、空页、无进展 Partial、错误/429、取消、最后一条预算游标包含问题 | 当前账号真实历史的短页/断网表现 |
 | ID / Normalization | 所有 ID 为字符串 DTO；int64 字符串 Album/custom emoji；文本/caption、媒体类型占位和未知内容 fallback；null / 0、具体 Emoji/Custom/Paid | 多个真实消息类型的展示 |
 | Album | 跨页/跨 chat 正确分组；最早有效成员逐字段来源、计数不累加、成员完整性未知显式 Partial | 真实频道的字段来源和扫描边界核对 |
@@ -57,10 +57,18 @@
 1. **Album**：以 chat + 非零 album ID 分组；最早有效字段分别取值并保留来源。没有总成员数证据，所有 Album 的成员完整性保守标 Partial，含 Album 的最终查询不标 Exact；手动转发仅覆盖卡片列出的成员。
 2. **分页**：请求 limit ≤100；后续请求为包含游标预留一位。短页继续，空页为历史结束，cursor 不变/向新方向为 Partial，错误或取消保留候选。日期 budget 包括定位区间的更新消息，不被 output_limit 截断。
 3. **null**：unknown 不当成 0；只匹配谓词 True。反应对象存在且 Emoji 缺项为已知 0，整个对象缺失为 unknown。
-4. **Session/代理**：沿用已验证 CLI 的本地 appdata 路径和 Base64 bytes 参数。每次启动输入数据库密码，不存前端或仓库。代理在 setTdlibParameters 前等待成功，没有配置时禁用旧代理。
+4. **Session/代理**：沿用已验证 CLI 的本地 appdata 路径和 Base64 bytes 参数。每次启动输入数据库密码，不存前端或仓库。先发送代理请求，再提交 setTdlibParameters，两者都发送后等待响应；没有配置时禁用旧代理。原先“先等待代理成功再提交参数”的实现已修正，避免 TDLib 排队造成相互等待。
 5. **动作**：确认前展示允许/拒绝项，提交时复核；只正常转发，Pending 不冒充送达，关注 TDLib 发送成功/失败更新。
 6. **后续项目**：媒体缩略图/播放器、聊天列表加载更多、发送报告持久化、自动重试、指标实时全局重排、MSI/NSIS 分发均未实现。首版媒体类型占位、最多 100 项聊天、单聊天/内存扫描满足当前范围；界面编辑一个排序字段，核心接受最多 10 字段。
 
 本机最短验收流程详见 [README](../README.md) 的“检查与手动验收”。用户自行确认真实发送后再验收转发；本次开发没有替用户执行该动作。
 
 TDLib 方法参数核对来源为 [官方 td_api.tl](https://github.com/tdlib/td/blob/master/td/generate/scheme/td_api.tl)，结合本地已验证 harness 的新式 addProxy 形状；本地运行时仍应以实际 DLL 的行为为准。
+
+## 初始化超时修复（2026-10-13）
+
+用户实测 addProxy / disableProxy 均超时。原因是原服务使用阻塞 request 等待代理确认，而 TDLib 在参数缺失阶段把代理方法放入 pending_preauthentication_requests；参数请求因此永远不会发送。CLI 原实现先发送代理、继续处理授权状态并发送参数，没有此等待环。
+
+修复为按序提交两条请求的 request_batch，随后先等待参数响应，再等待代理确认；参数错误或取消时通过 PendingRequest 的 Drop 清理其余路由槽位。原生回归使用本地 DLL 重现两种代理 API 的预初始化排队，并提交故意无效的 `api_id=0` 参数，确认立即报告参数错误而非等待代理超时；不提供真实凭据、不打开 Session 或发送消息。Mock 回归强制禁止在 bootstrap 中使用单条阻塞 request，覆盖启用代理、停用代理及失败。
+
+TDLib 状态分类和排队逻辑参见 [官方 Td.cpp](https://github.com/tdlib/td/blob/master/td/telegram/Td.cpp)：preauthentication 与 preinitialization 是不同阶段。真实 Clash 连通性仍须本机配置正确 SOCKS5/Mixed 端口后观察连接状态。
