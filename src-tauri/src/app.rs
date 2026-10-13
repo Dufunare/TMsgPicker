@@ -136,6 +136,9 @@ fn connection_status(s: State<AppState>) -> Connection {
 async fn connect(app: tauri::AppHandle, config: ConnectConfig) -> Result<()> {
     background(move || {
         let s = app.state::<AppState>();
+        if s.closing.load(Ordering::SeqCst) {
+            return Err("TDLib is shutting down".into());
+        }
         if s.connecting.swap(true, Ordering::SeqCst) {
             return Err("Connection setup already running".into());
         }
