@@ -18,13 +18,19 @@ pnpm.cmd tauri dev
 
 `build.rs` 检查全部文件，将 DLL 暂存到 Cargo profile 目录和测试程序所在 `deps/`。缺失文件会提供路径和配置提示。`pnpm.cmd` 可避免 PowerShell 执行策略阻止 `pnpm.ps1`。
 
-界面输入 API ID/hash，或通过 `TMSGPICKER_API_ID` / `TMSGPICKER_API_HASH` 环境变量提供；界面留空时使用环境变量。凭据请自行在本机设置，勿粘贴到报告或提交文件。
+主窗口为左侧 Account & Chats、中间 Messages & Results、右侧 Query Builder。两条分界线可拖动，也可聚焦后按左右方向键调整、Home 重置；账号管理中提供重置布局。小于 1060 CSS px 时查询栏变成可打开的侧边抽屉。
 
-首次启动选定一个非空数据库密码。后续必须输入相同密码。数据库和 Session 使用 `%LOCALAPPDATA%\com.funare.tmsgpicker\tdlib\db`，文件目录为同级 `files`，与现有 CLI auth 工具一致。密码经 Base64 编码传入 TDLib 的 bytes 字段，**Base64 本身不是加密**；由 TDLib 使用该密钥加密数据库。密码不持久化到源码、前端 storage 或配置文件，因此每次启动需重新输入数据库密码。
+点击左上「设置」编辑 API ID、API Hash 和 SOCKS5。保存配置优先于 `TMSGPICKER_API_ID` / `TMSGPICKER_API_HASH` 环境变量，未配置时使用环境变量；密码输入框留空保留已保存值，明确的清除按钮删除保存值。API/代理修改前必须安全断开；新设置在下一次连接生效。配置重置仅重置普通设置，不删除账号、秘密或 Session。
 
-SOCKS5 的地址、端口和可选用户名/密码在界面配置。使用 Clash 时，服务器只填 `127.0.0.1`，端口填 Clash 实际启用的 SOCKS5 或 Mixed 端口（例如本机配置为 7897）；未设置代理认证时用户名/密码留空。TDLib 不自动跟随 Clash 的系统 HTTP 代理。
+普通设置、Profile 元数据和 **DPAPI 密文**保存在 `%LOCALAPPDATA%\com.funare.tmsgpicker\settings.json`，schema version 为 1。写入经过 flush 和 Windows 原子替换；损坏或未来版本文件明确报错且不覆盖。API Hash、代理密码和可选数据库口令仅由 Rust 使用当前 Windows 用户范围 DPAPI 加密/解密，读取 IPC 只返回保存状态，秘密不会回填 Vue。验证码、手机号授权输入和 2FA 不持久化。保护失败需清除该保存凭据并重新输入，不降级为明文。请不要提交或分享凭据、Session 或配置文件。
 
-初始化顺序：先发送 `addProxy(enable=true)`，或没有代理时发送 `disableProxy`，随后立即发送 `setTdlibParameters`，两条都发出后再等待响应。**不能先等代理响应再提交参数**：代理 API 可在授权前调用，但在 `authorizationStateWaitTdlibParameters` 阶段会排队，等待参数初始化。初始化失败先报告 `setTdlibParameters` 错误并清理 pending，不再被代理请求阻塞 45 秒；代理配置成功也不表示 Telegram 已连通，应查看连接状态。修改代理/API 配置前先安全断开。手机号、验证码、2FA 和邮箱授权由界面提交；额外授权步骤显示明确提示，不自动重试验证码。
+首次升级检测 `tdlib/db` 后幂等导入 Legacy Profile，继续使用原来的 `tdlib/db` 和 `tdlib/files`，不迁移、覆盖或删除。数据库密码必须使用原有 passphrase；仍按原规则 Base64 编码为 TDLib bytes（Base64 不等于加密）。新账号使用 `tdlib/accounts/<内部 Profile ID>/db` 与 `files`。默认手工输入口令；只有用户勾选「记住此设备」才保存 DPAPI 密文，取消勾选立即清除保存口令而保留数据库。
+
+「添加账号」创建独立 Profile。选择其他账号时，已记住口令可顺序关闭并恢复；未记住则安全断开旧会话，输入所选账号口令再连接。普通断开/切换使用 `close`，保留 Telegram Session；「退出 Telegram 登录」经过确认调用 `logOut`，TDLib 会清除该授权的本地数据。移除 Profile 默认保留 Session 文件；新 Profile 可选择二次确认删除本地数据，后端检查目录归属和重解析点，Legacy 目录不允许由此删除。重复登录同一 Telegram 用户会提示重复 Profile，目录始终隔离，不自动合并。
+
+SOCKS5 服务器填写主机（如 `127.0.0.1`），端口使用实际 SOCKS5/Mixed 监听端口；未设置代理认证时用户名和密码留空。TDLib 不自动跟随 Windows 的 HTTP 代理。
+
+初始化顺序：先发送 `addProxy(enable=true)`，或没有代理时发送 `disableProxy`，随后立即发送 `setTdlibParameters`，两条都发出后再等待响应。**不能先等代理响应再提交参数**：代理 API 可在授权前调用，但在 `authorizationStateWaitTdlibParameters` 阶段会排队，等待参数初始化。初始化失败先报告 `setTdlibParameters` 错误并清理 pending，不再被代理请求阻塞 45 秒；代理配置成功也不表示 Telegram 已连通，应查看连接状态。修改代理/API 配置前先安全断开。手机号、验证码、2FA 和邮箱授权由账号区域提交；额外授权步骤显示明确提示，不自动重试验证码。
 
 ## 查询语义
 
@@ -58,13 +64,7 @@ pnpm.cmd build
 
 现有 `src-tauri/src/bin/tdlib_smoke.rs` / `tdlib_auth.rs` 保持可用。`tdlib_auth` 是原有手动工具，代理设置及打印方式仍采用原来的 bring-up 代码；日常使用新的桌面授权服务，不将旧 CLI 的输出当作可分享诊断。
 
-最短手工验收：
-
-1. `pnpm.cmd tauri dev`；输入本机 API 配置、现有数据库密码和 SOCKS5 配置，完成必要授权。安全断开再连接，确认无需再次输入登录码。
-2. 刷新聊天，或解析一个已知公开 username；选聊天，扫描最近 50 条；核对分页进度、Album 合并、未知值与 0。切换评论/Emoji 条件和排序；结果上限设 1，确认仍扫描 50 条。
-3. 选择较大范围，取消后立即运行新查询，确认旧 run 的事件不覆盖新结果；验证日期范围与预算耗尽的 Partial 状态。
-4. 点击原文；在用户自行同意真实发送后，选一条合规消息，目标 Saved Messages，预检并确认转发，核对 Sent/Failed。再验证受保护内容被拒绝。**自动化测试不会执行真实转发。**
-5. 关闭窗口，确认正常退出；异常关闭提示出现时保留程序并重试安全断开，不删除 Session 文件。
+本轮功能、IPC、数据目录、验证结果和逐步手工验收见 [三栏与多账号验收记录](docs/UI_ACCOUNTS_ACCEPTANCE.md)。本机运行：`pnpm.cmd tauri dev`，或构建 `pnpm.cmd tauri build --debug --no-bundle` 后启动 `src-tauri/target/debug/tmsgpicker.exe`（同目录需 staging 的 DLL）。
 
 ## 开发接口与部署限制
 

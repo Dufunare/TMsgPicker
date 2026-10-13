@@ -257,7 +257,12 @@ fn duplicate_cursor_empty_and_no_progress_are_distinct() {
     let r = scan(&g, &spec(50), "a".into(), &AtomicBool::new(false), |_| {}).unwrap();
     assert_eq!(r.scanned, 2);
     assert_eq!(r.status, ScanStatus::Complete);
-    let g = MockTelegramGateway::pages(vec![page(vec![message(100)]), page(vec![message(100)])]);
+    let g = MockTelegramGateway::pages(vec![
+        page(vec![message(100)]),
+        page(vec![message(100)]),
+        page(vec![message(100)]),
+        page(vec![message(100)]),
+    ]);
     let r = scan(&g, &spec(50), "a".into(), &AtomicBool::new(false), |_| {}).unwrap();
     assert_eq!(r.status, ScanStatus::Partial);
     assert!(!r.exact);
@@ -707,7 +712,14 @@ fn transient_cursor_only_pages_are_retried_before_marking_partial() {
         page(vec![message(100)]),
         page(vec![message(100), message(99)]),
     ]);
-    let r = scan(&g, &spec(2), "retry".into(), &AtomicBool::new(false), |_| {}).unwrap();
+    let r = scan(
+        &g,
+        &spec(2),
+        "retry".into(),
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
     assert_eq!(r.scanned, 2);
     assert_eq!(r.status, ScanStatus::Complete);
     assert_eq!(r.pages, 3);
@@ -722,7 +734,14 @@ fn permanently_stagnant_cursor_is_bounded() {
         page(vec![message(100)]),
         page(vec![message(99)]),
     ]);
-    let r = scan(&g, &spec(2), "retry".into(), &AtomicBool::new(false), |_| {}).unwrap();
+    let r = scan(
+        &g,
+        &spec(2),
+        "retry".into(),
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
     assert_eq!(r.status, ScanStatus::Partial);
     assert_eq!(r.scanned, 1);
     assert_eq!(r.pages, 4);

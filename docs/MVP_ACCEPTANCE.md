@@ -72,3 +72,7 @@ TDLib 方法参数核对来源为 [官方 td_api.tl](https://github.com/tdlib/td
 修复为按序提交两条请求的 request_batch，随后先等待参数响应，再等待代理确认；参数错误或取消时通过 PendingRequest 的 Drop 清理其余路由槽位。原生回归使用本地 DLL 重现两种代理 API 的预初始化排队，并提交故意无效的 `api_id=0` 参数，确认立即报告参数错误而非等待代理超时；不提供真实凭据、不打开 Session 或发送消息。Mock 回归强制禁止在 bootstrap 中使用单条阻塞 request，覆盖启用代理、停用代理及失败。
 
 TDLib 状态分类和排队逻辑参见 [官方 Td.cpp](https://github.com/tdlib/td/blob/master/td/telegram/Td.cpp)：preauthentication 与 preinitialization 是不同阶段。真实 Clash 连通性仍须本机配置正确 SOCKS5/Mixed 端口后观察连接状态。
+
+## 三栏与多账号后续迭代
+
+2026-10-13：已完成设置、DPAPI、Profile/Legacy、串行会话切换与三栏 UI。新的交付与验收记录见 [UI_ACCOUNTS_ACCEPTANCE.md](UI_ACCOUNTS_ACCEPTANCE.md)；本页原有 v0.1 结果是历史记录，新的验证状态以该文档为准。

@@ -189,6 +189,10 @@ impl TdlibGateway {
                 ffi::td_send(self.client, request.as_ptr());
             }
         }
+        self.wait_closed()
+    }
+    /// logOut closes TDLib itself; wait without submitting close during logout.
+    pub fn wait_closed(&self) -> Result<()> {
         let (guard, _) = self
             .closed
             .1
