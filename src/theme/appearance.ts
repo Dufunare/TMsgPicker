@@ -1,4 +1,4 @@
-import { reactive, readonly, watch } from 'vue';
+import { reactive, readonly } from 'vue';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
