@@ -1,0 +1,79 @@
+/* Shared controls. Functional layouts stay in workspace.css, appearance stays here. */
+* { box-sizing: border-box; }
+html, body, #app { margin: 0; height: 100%; }
+body { background: var(--canvas); color: var(--text); font-size: calc(13px * var(--font-scale)); line-height: 1.5; }
+h2, h3, p { margin-top: 0; }
+h2 { font-size: calc(16px * var(--font-scale)); color: var(--text-strong); letter-spacing: -.02em; }
+h3 { font-size: calc(13px * var(--font-scale)); color: var(--text-strong); }
+small, .muted { color: var(--text-muted); font-size: calc(11px * var(--font-scale)); }
+label { display: flex; flex-direction: column; gap: 5px; margin: 10px 0; color: var(--text); font-size: calc(12px * var(--font-scale)); font-weight: 500; }
+label.check { flex-direction: row; align-items: center; gap: 8px; }
+.check input { width: auto; min-height: auto; }
+button, input, select, textarea { font: inherit; color: inherit; min-width: 0; }
+input:not([type="checkbox"]):not([type="radio"]), select, textarea {
+  height: var(--control-height); width: 100%; padding: 5px 10px;
+  background: var(--field); border: 1px solid var(--border);
+  border-radius: calc(var(--radius) * .55);
+  transition: border-color .14s, background-color .14s, box-shadow .14s;
+}
+textarea { height: auto; min-height: 80px; }
+input::placeholder { color: var(--text-faint); }
+input:hover, select:hover, textarea:hover { border-color: var(--text-faint); }
+input:focus, select:focus, textarea:focus { border-color: var(--accent); outline: 2px solid var(--ring); outline-offset: 0; }
+input[type="checkbox"], input[type="radio"] { accent-color: var(--accent); }
+select { cursor: pointer; }
+button {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: var(--control-height); padding: 5px 12px;
+  border: 1px solid var(--border); border-radius: calc(var(--radius) * .55);
+  background: var(--surface); color: var(--text);
+  cursor: pointer; font-weight: 550; font-size: calc(12px * var(--font-scale));
+  transition: background .14s, border-color .14s, color .14s;
+}
+button:hover:not(:disabled) { background: var(--hover); border-color: var(--ring); }
+button:disabled { opacity: .48; cursor: not-allowed; }
+button.primary, .button-primary {
+  background: var(--accent); border-color: var(--accent); color: var(--accent-contrast);
+}
+button.primary:hover:not(:disabled) { background: var(--accent-hover); border-color: var(--accent-hover); color: var(--accent-contrast); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.buttons { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.error, .notice { font-size: calc(12px * var(--font-scale)); padding: 9px 11px; margin: 8px 0; border-radius: calc(var(--radius) * .65); overflow-wrap: anywhere; }
+.error { color: var(--danger); background: var(--danger-bg); }
+.notice { color: var(--text); background: var(--notice-bg); }
+.panel { min-width: 0; }
+.badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 9px; font-size: 11px; color: var(--accent); background: var(--accent-soft); }
+.badge.Complete { color: var(--success); background: var(--surface-muted); }
+.badge.Partial, .badge.Cancelled { color: var(--warning); background: var(--surface-muted); }
+.badge.Error { color: var(--danger); background: var(--danger-bg); }
+.filter-node {
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 7px;
+  border: 1px solid var(--border-subtle); border-radius: calc(var(--radius) * .72);
+  padding: 9px; background: var(--surface-subtle);
+}
+.filter-node > select { width: auto; max-width: 100%; flex: 1 1 90px; }
+.filter-node > .short { width: 100px; flex: 1 1 76px; }
+.filter-children { width: 100%; padding-left: 10px; border-left: 2px solid var(--border); }
+.filter-row { display: flex; gap: 6px; align-items: start; margin-bottom: 8px; }
+.filter-row > .filter-node { flex: 1; }
+.media, .metrics, .reactions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0; }
+.metrics { padding: 10px 12px; background: var(--surface-muted); border-radius: calc(var(--radius) * .7); }
+.metrics span { white-space: nowrap; }
+.media-kind, .reactions span { border-radius: calc(var(--radius) * .5); padding: 3px 8px; background: var(--surface-muted); color: var(--text-muted); font-size: 11px; }
+.reactions span { color: var(--text); }
+.post-text { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.7; }
+.post-top { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.post-top strong { overflow-wrap: anywhere; }
+.empty { text-align: center; padding: 42px 18px; color: var(--text-muted); }
+.confirm { padding: 14px; margin: 12px 0; background: var(--notice-bg); border: 1px solid var(--border); border-radius: var(--radius); }
+.confirmation-dialog { background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 24px; width: 460px; max-width: 92vw; box-shadow: var(--shadow-popover); }
+.confirmation-dialog::backdrop { background: rgba(8, 17, 29, .56); }
+summary { cursor: pointer; }
+:where(.chat-list,.middle-column,.right-column,.settings-content,.drawer,.account-menu-items,.filter-node,.login-scroll) {
+  scrollbar-width: thin; scrollbar-color: var(--border) transparent;
+}
+:where(.chat-list,.middle-column,.right-column,.settings-content,.drawer,.account-menu-items,.filter-node,.login-scroll)::-webkit-scrollbar { width: var(--scrollbar-width); height: var(--scrollbar-width); }
+:where(.chat-list,.middle-column,.right-column,.settings-content,.drawer,.account-menu-items,.filter-node,.login-scroll)::-webkit-scrollbar-track { background: transparent; }
+:where(.chat-list,.middle-column,.right-column,.settings-content,.drawer,.account-menu-items,.filter-node,.login-scroll)::-webkit-scrollbar-thumb { background: var(--border); border: 2px solid var(--surface); border-radius: 999px; }
+:where(.chat-list,.middle-column,.right-column,.settings-content,.drawer,.account-menu-items,.filter-node,.login-scroll)::-webkit-scrollbar-button { display: none; }
+@media(prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: 0s !important; animation-duration: 0s !important; } }
