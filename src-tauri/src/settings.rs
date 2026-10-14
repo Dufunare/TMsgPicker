@@ -20,6 +20,7 @@ pub struct Settings {
     pub last_profile_id: Option<String>,
     pub left_ratio: f64,
     pub right_ratio: f64,
+    pub card_compact: bool,
 }
 impl Default for Settings {
     fn default() -> Self {
@@ -33,6 +34,7 @@ impl Default for Settings {
             last_profile_id: None,
             left_ratio: 0.23,
             right_ratio: 0.29,
+            card_compact: false,
         }
     }
 }
@@ -155,6 +157,11 @@ impl Store {
         }
         self.disk.settings = settings;
         self.save()
+    }
+    pub fn set_card_compact(&mut self, compact: bool) -> Result<()> {
+        let mut settings = self.settings();
+        settings.card_compact = compact;
+        self.set_settings(settings)
     }
     pub fn reset(&mut self) -> Result<()> {
         self.disk.settings = Settings::default();
@@ -515,6 +522,35 @@ mod tests {
         s.set_secret("api", None).unwrap();
         assert!(!s.snapshot().has_saved_api_hash);
         assert!(s.secret("api").unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn compact_preference_defaults_for_existing_configs_and_preserves_accounts() {
+        let root = temp_root();
+        let mut store = Store::open(root.clone()).unwrap();
+        let id = store.add("Synthetic profile".into()).unwrap();
+        let mut settings = store.settings();
+        settings.left_ratio = 0.27;
+        settings.right_ratio = 0.31;
+        store.set_settings(settings).unwrap();
+        let mut old = serde_json::to_value(&store.disk).unwrap();
+        old["settings"]
+            .as_object_mut()
+            .unwrap()
+            .remove("card_compact");
+        fs::write(
+            root.join("settings.json"),
+            serde_json::to_vec(&old).unwrap(),
+        )
+        .unwrap();
+        let mut store = Store::open(root.clone()).unwrap();
+        assert!(!store.settings().card_compact);
+        store.set_card_compact(true).unwrap();
+        let store = Store::open(root.clone()).unwrap();
+        assert!(store.settings().card_compact);
+        assert_eq!(store.settings().left_ratio, 0.27);
+        assert_eq!(store.settings().right_ratio, 0.31);
+        assert!(store.profile(&id).is_ok());
         fs::remove_dir_all(root).unwrap();
     }
     #[test]

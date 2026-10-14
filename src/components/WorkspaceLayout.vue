@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 const props=defineProps<{left:number;right:number}>();
-const emit=defineEmits<{resize:[left:number,right:number];reset:[]}>();
-const host=ref<HTMLElement>(); const width=ref(1400); const queryOpen=ref(false); const dragging=ref(false);
+const emit=defineEmits<{resize:[left:number,right:number];reset:[];commit:[]}>();
+const host=ref<HTMLElement>(); const width=ref(1400); const queryOpen=ref(false); const dragging=ref(false), pressed=ref(false), activeSplitter=ref<'left'|'right'|null>(null);
 let observer:ResizeObserver; let side:'left'|'right'='left';
 const narrow=computed(()=>width.value<1060);
 const dimensions=computed(()=>{
@@ -17,18 +17,18 @@ function adjust(which:'left'|'right',delta:number){
   else emit('resize',left/available,Math.max(300,Math.min(available-left-400,right+delta))/available);
 }
 let last=0;
-function down(e:PointerEvent,which:'left'|'right'){if(narrow.value)return;side=which;last=e.clientX;dragging.value=true;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);e.preventDefault();}
-function move(e:PointerEvent){if(!dragging.value)return;adjust(side,(e.clientX-last)*(side==='left'?1:-1));last=e.clientX;}
-function end(){dragging.value=false;}
-function key(e:KeyboardEvent,which:'left'|'right'){if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();adjust(which,(e.key==='ArrowRight'?20:-20)*(which==='left'?1:-1));}else if(e.key==='Home'){emit('reset');}}
+function down(e:PointerEvent,which:'left'|'right'){if(narrow.value||e.button!==0)return;side=which;last=e.clientX;pressed.value=true;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);e.preventDefault();}
+function move(e:PointerEvent){if(!pressed.value||e.clientX===last)return;dragging.value=true;activeSplitter.value=side;adjust(side,(e.clientX-last)*(side==='left'?1:-1));last=e.clientX;}
+function end(){pressed.value=false;activeSplitter.value=null;if(dragging.value){dragging.value=false;emit('commit');}}
+function key(e:KeyboardEvent,which:'left'|'right'){if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();adjust(which,(e.key==='ArrowRight'?20:-20)*(which==='left'?1:-1));emit('commit');}else if(e.key==='Home'){emit('reset');}}
 onMounted(()=>{observer=new ResizeObserver(entries=>{width.value=entries[0]!.contentRect.width;});observer.observe(host.value!);});onUnmounted(()=>observer?.disconnect());
 </script>
 <template>
 <div ref="host" class="workspace" :class="{dragging,narrow}" :style="{gridTemplateColumns:columns}">
   <aside class="left-column"><slot name="left"/></aside>
-  <div class="splitter" role="separator" aria-label="调整账号栏宽度" aria-orientation="vertical" :aria-valuenow="Math.round(dimensions.left/dimensions.available*100)" :aria-valuemin="Math.round(240/dimensions.available*100)" :aria-valuemax="Math.round((dimensions.available-dimensions.right-400)/dimensions.available*100)" :tabindex="narrow ? -1 : 0" @pointerdown="down($event,'left')" @pointermove="move" @pointerup="end" @pointercancel="end" @lostpointercapture="end" @keydown="key($event,'left')"/>
+  <div class="splitter" :class="{'is-dragging':activeSplitter==='left'}" :role="narrow?'presentation':'separator'" :aria-disabled="narrow" aria-label="调整账号栏宽度" aria-orientation="vertical" :aria-valuenow="Math.round(dimensions.left/dimensions.available*100)" :aria-valuemin="Math.round(240/dimensions.available*100)" :aria-valuemax="Math.round((dimensions.available-dimensions.right-400)/dimensions.available*100)" :tabindex="narrow ? -1 : 0" @pointerdown="down($event,'left')" @pointermove="move" @pointerup="end" @pointercancel="end" @lostpointercapture="end" @keydown="key($event,'left')"/>
   <section class="middle-column"><button v-if="narrow" class="query-toggle" @click="queryOpen=!queryOpen">{{queryOpen?'关闭查询面板':'打开 Query Builder'}}</button><slot name="middle"/></section>
-  <div v-if="!narrow" class="splitter" role="separator" aria-label="调整查询栏宽度" aria-orientation="vertical" :aria-valuenow="Math.round(dimensions.right/dimensions.available*100)" :aria-valuemin="Math.round(300/dimensions.available*100)" :aria-valuemax="Math.round((dimensions.available-dimensions.left-400)/dimensions.available*100)" tabindex="0" @pointerdown="down($event,'right')" @pointermove="move" @pointerup="end" @pointercancel="end" @lostpointercapture="end" @keydown="key($event,'right')"/>
+  <div v-if="!narrow" class="splitter" :class="{'is-dragging':activeSplitter==='right'}" role="separator" aria-label="调整查询栏宽度" aria-orientation="vertical" :aria-valuenow="Math.round(dimensions.right/dimensions.available*100)" :aria-valuemin="Math.round(300/dimensions.available*100)" :aria-valuemax="Math.round((dimensions.available-dimensions.left-400)/dimensions.available*100)" tabindex="0" @pointerdown="down($event,'right')" @pointermove="move" @pointerup="end" @pointercancel="end" @lostpointercapture="end" @keydown="key($event,'right')"/>
   <aside v-show="!narrow||queryOpen" class="right-column" :class="{drawer:narrow}"><button v-if="narrow" @click="queryOpen=false">关闭查询面板</button><slot name="right"/></aside>
 </div>
 </template>

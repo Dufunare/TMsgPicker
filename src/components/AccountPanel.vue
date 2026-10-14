@@ -1,22 +1,33 @@
-﻿<script setup lang="ts">
-import { useWorkspaceContext } from '../useWorkspace';
-const {connection,ready,busy,forwarding,accountError,notice,snapshot,profileId,rememberDatabase,passphrase,settingsOpen,authLabel,authValue,connect,disconnect,submitAuth,addAccount,selectAccount,renameAccount,removeAccount,logoutAccount,clearSecret,resetLayout}=useWorkspaceContext();
-import AccountSettings from './AccountSettings.vue';
+<script setup lang="ts">
+import {computed,ref,onMounted,onUnmounted} from 'vue';
+import {useWorkspaceContext} from '../useWorkspace';
+import UiIcon from './UiIcon.vue';
+const {connection,ready,busy,forwarding,accountError,notice,snapshot,profileId,cardCompact,authLabel,openSettings,connectFromCard,disconnect,addAccount,selectAccount,renameAccount,removeAccount,logoutAccount,toggleCard}=useWorkspaceContext();
+const menu=ref<HTMLDetailsElement>();
+const profile=computed(()=>snapshot.value?.profiles.find(p=>p.profile_id===profileId.value));
+const name=computed(()=>profile.value?.display_name??'未选择账号');
+const active=computed(()=>connection.value.profile_id===profileId.value);
+const status=computed(()=>!active.value?'未连接':authLabel.value?'需要授权':connection.value.connection_state==='connectionStateReady'&&ready.value?'已连接':ready.value?'连接中':connection.value.auth_state==='Disconnected'||connection.value.auth_state==='authorizationStateClosed'?'未连接':'连接中');
+function outside(event:PointerEvent){if(menu.value&&!menu.value.contains(event.target as Node))closeMenu();}
+onMounted(()=>document.addEventListener('pointerdown',outside));onUnmounted(()=>document.removeEventListener('pointerdown',outside));
+function closeMenu(){if(menu.value)menu.value.open=false;}
+async function run(operation:()=>Promise<void>){closeMenu();await operation();}
 </script>
 <template>
-<section class="account-panel">
-  <div class="brand"><strong>TMsgPicker</strong><button @click="settingsOpen=!settingsOpen" aria-label="账号设置">设置</button></div>
-  <label>账号<select v-model="profileId" @change="selectAccount(true)" :disabled="busy||forwarding"><option value="">添加或选择账号</option><option v-for="p in snapshot?.profiles??[]" :key="p.profile_id" :value="p.profile_id">{{p.display_name}}{{p.profile_id===connection.profile_id?' · 当前':''}}</option></select></label><button :disabled="busy||forwarding" @click="addAccount">＋ 添加账号</button>
-  <small v-if="connection.profile_id">当前会话：{{snapshot?.profiles.find(p=>p.profile_id===connection.profile_id)?.display_name}}</small><div class="account-status"><span class="status-dot" :class="{online:ready}"/><strong>{{ready?'已登录':connection.auth_state}}</strong><small>{{connection.connection_state}}</small></div>
-  <small>{{connection.detail}}</small>
-  <p v-if="accountError" class="error" role="alert">{{accountError}}</p><p v-if="notice" class="notice">{{notice}}</p>
-  <template v-if="profileId && (connection.profile_id!==profileId || connection.auth_state==='Disconnected' || connection.auth_state==='authorizationStateClosed' || connection.auth_state==='authorizationStateWaitTdlibParameters')">
-    <label>此账号数据库口令<input v-model="passphrase" type="password" autocomplete="off" :placeholder="rememberDatabase?'已安全保存；留空自动解锁':'输入原有口令；新账号设置口令'"></label>
-    <label class="check"><input v-model="rememberDatabase" type="checkbox" @change="!rememberDatabase && clearSecret(`db:${profileId}`)">记住此设备（Windows 保护）</label>
-  </template>
-  <div class="buttons"><button class="primary" :disabled="busy||forwarding||!profileId||(connection.profile_id===profileId&&ready)" @click="connect">{{busy?'处理中…':connection.profile_id && connection.profile_id!==profileId?'切换并连接':'连接 / 恢复'}}</button><button :disabled="busy||forwarding||connection.auth_state==='Disconnected'" @click="disconnect">断开</button></div>
-  <form v-if="authLabel" @submit.prevent="submitAuth" class="auth-step"><label>{{authLabel}}<input v-model="authValue" :type="connection.auth_state==='authorizationStateWaitPhoneNumber'||connection.auth_state==='authorizationStateWaitEmailAddress'?'text':'password'" required autocomplete="off"></label><button class="primary" :disabled="busy">提交授权</button></form>
-  <details class="account-management"><summary>账号管理与布局</summary><div class="buttons"><button :disabled="busy||forwarding" @click="addAccount">添加账号</button><button :disabled="busy||!profileId" @click="renameAccount">重命名</button><button :disabled="busy||!ready" @click="logoutAccount">退出 Telegram 登录</button><button :disabled="busy||!profileId" @click="removeAccount">移除本地账号</button><button @click="resetLayout">重置布局</button></div><small>默认保留 Session 文件；新 Profile 可二次确认删除本地数据，Legacy 保留旧目录。连接所选账号时安全关闭当前会话。</small></details>
-  <AccountSettings v-if="settingsOpen"/>
+<section class="account-panel" :class="{compact:cardCompact}">
+  <div class="account-strip">
+    <div class="user-card">
+      <span class="user-avatar" aria-hidden="true">{{Array.from(name)[0]?.toUpperCase()??'?'}}</span>
+      <div class="user-identity"><strong :title="name">{{name}}</strong><div class="user-meta" :aria-label="status"><span v-if="profile?.username" class="username" :title="`@${profile.username}`">@{{profile.username}}</span><span class="status-dot" :class="{online:status==='已连接',connecting:status==='连接中'}" :title="status"/><span class="user-status">{{status}}</span></div></div>
+      <div class="account-tools">
+        <button class="icon-button" title="添加账号" aria-label="添加账号" :disabled="busy||forwarding" @click="addAccount"><UiIcon name="plus"/></button>
+        <div class="account-switch"><UiIcon name="chevron"/><select v-model="profileId" aria-label="切换账号" title="切换账号" :disabled="busy||forwarding" @change="selectAccount(true)"><option v-if="!profileId" value="">选择账号</option><option v-for="p in snapshot?.profiles??[]" :key="p.profile_id" :value="p.profile_id">{{p.display_name}}</option></select></div>
+        <details ref="menu" class="account-menu" @keydown.esc="closeMenu"><summary class="icon-button" aria-label="更多账号操作" title="更多账号操作"><UiIcon name="more"/></summary><div class="account-menu-items"><button :disabled="busy||forwarding||!profileId||(active&&ready)" @click="run(connectFromCard)">连接 / 恢复</button><button :disabled="busy||forwarding||connection.auth_state==='Disconnected'" @click="run(disconnect)">断开当前连接</button><button :disabled="busy||!profileId" @click="run(renameAccount)">重命名所选账号</button><button :disabled="busy||!ready" @click="run(logoutAccount)">退出当前 Telegram 登录…</button><button :disabled="busy||!profileId" @click="run(removeAccount)">移除所选本地账号…</button><button @click="closeMenu();toggleCard()">{{cardCompact?'展开用户卡片':'收起用户卡片'}}</button></div></details>
+      </div>
+    </div>
+    <button class="icon-button settings-gear" title="应用设置" aria-label="打开设置窗口" @click="openSettings"><UiIcon name="settings"/></button>
+  </div>
+  <div v-if="accountError||notice||authLabel" class="account-feedback"><button v-if="accountError" class="brief-error" :title="accountError" @click="openSettings">操作未完成 · 查看详情</button><button v-else-if="authLabel" class="brief-status" @click="openSettings">完成账号授权</button><span v-else :title="notice">设置已更新</span></div>
+  <button class="card-collapse" :aria-label="cardCompact?'展开用户卡片':'收起用户卡片'" :title="cardCompact?'展开':'收起'" @click="toggleCard"><UiIcon :name="cardCompact?'expand':'collapse'"/></button>
 </section>
 </template>

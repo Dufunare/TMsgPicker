@@ -80,3 +80,7 @@ computer-use 已尝试，但本机 native pipe 不可用（os error 2），浏�
 6. 打开原文，Saved Messages 解析和权限预检。只有用户自己明确同意真实发送后，手动确认一条合规转发，检查 Pending/Sent/Failed；Pending 未确认时切换、断开、关闭窗口应被阻止。自动化测试不执行本步骤的真实发送。
 7. 对自己选择的测试账号，验证「断开」保留授权；单独确认「退出 Telegram 登录」后需重新授权。移除本地 Profile 默认保留文件；仅对可丢弃的新 Profile 测试二次确认删除。Legacy 不提供删除数据选项。不要在真实重要 Session 上试删除。
 8. 清除所选账号保存口令，检查数据库仍在，下一次手工输入原口令可打开。合成损坏密文的恢复已由测试覆盖；无需修改真实凭据文件来制造故障。
+
+## 后续 UI 精简
+
+第二轮将紧凑卡片、独立 Settings Window、授权入口与透明 Splitter 接入，当前说明和 GUI 待验收项目见 [UI_REFINEMENT_ACCEPTANCE.md](UI_REFINEMENT_ACCEPTANCE.md)。本页是第一轮历史交付记录。

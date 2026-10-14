@@ -25,6 +25,9 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 
 | 命令 | 顶层参数 | 返回/行为 |
 |---|---|---|
+| `open_settings` | `{profileId:string|null}` | 创建唯一 settings WebviewWindow，或聚焦已有窗口并发送 settings-focus-profile；后端验证 Profile，不接受 URL/路径 |
+| `close_settings` | 无 | 仅关闭 settings，不触发会话关闭 |
+| `save_ui_preferences` | `{cardCompact:boolean}` | 仅保存折叠偏好，保留 API、Profile、秘密与布局 |
 | `app_settings` | 无 | `SettingsSnapshot`，仅非敏感字段及 has_saved_* |
 | `save_settings` | `{edit:{settings,api_hash:string|null,proxy_password:string|null}}` | Snapshot；秘密 null 表示保持，非空值更新 DPAPI 密文；Gateway 运行时拒绝 |
 | `save_layout` | `{left:number,right:number}` | 保存列宽比例，连接期间允许 |
@@ -35,7 +38,7 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 | `remove_account` | `{profileId,confirmed,deleteData,deleteConfirmed}` | Snapshot；活动账号须先断开，默认保留数据，删除数据要求第二次确认并验证归属；拒绝删除 Legacy 数据 |
 | `logout_account` | `{profileId,confirmed:true}` | 仅当前 Ready 账号；logOut 后等待 Closed 和线程结束，普通断开不调用此命令 |
 
-`Settings = {schema_version:1,api_id,proxy_enabled,proxy_server,proxy_port,proxy_username,last_profile_id,left_ratio,right_ratio}`。
+`Settings = {schema_version:1,api_id,proxy_enabled,proxy_server,proxy_port,proxy_username,last_profile_id,left_ratio,right_ratio,card_compact}`。
 
 `SettingsSnapshot = {settings,profiles,has_saved_api_hash,has_saved_proxy_password}`。
 Profile 字段为 `profile_id,telegram_user_id:string|null,display_name,username:string|null,is_legacy_profile,last_used_at,has_saved_database_secret`。首次授权前 Telegram ID 为空；Ready 后 getMe 更新身份。username/Telegram ID 只作为元数据，不构造 Session 路径。
@@ -76,6 +79,8 @@ Profile 字段为 `profile_id,telegram_user_id:string|null,display_name,username
 | `connection` | 包含 profile_id 和递增 generation，以及授权状态类型、连接状态类型和通用提示；不广播原始手机号/验证码/邮箱/密码提示 |
 | `query-progress` | `ScanResult = {run_id,status,scanned,pages,exact,detail,posts}`；status 为 Scanning/Partial/Complete/Cancelled/Error |
 | `forward-update` | `{generation,target,old_message_id,state:"Sent"|"Failed"}`；对应发送临时 ID |
+| `workspace-settings-changed` | `{source:"main"\|"settings"}`；前端发送不含秘密的刷新通知，另一窗口重新通过 app_settings 读取非敏感状态；不作为会话授权依据 |
+| `settings-focus-profile` | `string|null`；后端仅向 settings 窗口发送要显示的 Profile；相同账号仅聚焦，不清空输入 |
 | `accounts-changed` | 无敏感负载；前端重新读取 app_settings，刷新 getMe 更新后的 Profile |
 | `account-notice` | 重复 Telegram 身份或元数据保存失败的通用提示 |
 | `app-error` | 安全关闭失败时的短错误；保持进程，允许重试 |
@@ -93,3 +98,11 @@ ReactionKey 序列化为 `{kind:"emoji"|"custom_emoji"|"paid"|"unknown",value?}`
 Lifecycle mutex 串行连接、授权、关闭、查询启动、预检/转发与依赖会话的读取。扫描继续使用独立取消标记和 run ID；切换前取消并失效结果，关闭失败保持 Gateway 且禁止业务调用，不启动第二个客户端。唯一 native ACTIVE 守卫继续生效。接收回调捕获 generation，过期回调不写状态，连接/转发事件带 generation；查询事件沿用原 ScanResult DTO，以 generation + run ID 在后端过滤，以当前 run ID 在前端过滤。前端聊天异步响应也检查会话 token。
 
 已提交发送与扫描取消分开：后台维护 Pending 临时消息 ID，收到 Sent/Failed 更新后解除；有提交中或 Pending 发送时拒绝切换、断开和窗口退出，用户等待最终状态后重试。不会把 Pending 误报为 Sent。退出应用与切换抢占同一 lifecycle 锁，冲突时提示重试。
+
+## 多窗口生命周期（第二轮 UI）
+
+主窗口 label 为 `main`，独立设置窗口为 `settings`，URL 为本地 `index.html?view=settings`。Settings capability 仅为该窗口提供 core event 访问；窗口创建/关闭通过固定目标的 Rust 命令，不开放任意原始 TDLib 或解密秘密接口。Settings 默认 500 × 580，最小 420 × 440，可调整和内部滚动，重复创建由独立 mutex 串行，已有窗口解除最小化并聚焦。
+
+`on_window_event` 的 CloseRequested 通过 `route_window_close` 只对 main 执行 prevent_close + begin_safe_exit；settings 关闭正常销毁该小窗，不调用 close_session，不修改 generation、查询或发送状态。main 关闭即使没有 Gateway，也退出整个应用，避免遗留 Settings。原有 RunEvent 安全退出与 Pending 发送保护保留。
+
+`card_compact` 是 schema 1 的向后兼容普通字段，旧配置缺失时为 false；不自动重置账号、凭据或栏宽。Settings 保存 API/代理前重新读取最新普通配置，避免用打开窗口时的旧快照覆盖主窗口后来调整的布局或折叠偏好。

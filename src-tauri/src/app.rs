@@ -38,6 +38,7 @@ impl Default for Connection {
 #[derive(Default)]
 struct AppState {
     lifecycle: Mutex<()>,
+    settings_window: Mutex<()>,
     store: Mutex<Option<Store>>,
     profile: Mutex<Option<String>>,
     epoch: AtomicU64,
@@ -198,6 +199,61 @@ fn with_store<T>(s: &AppState, f: impl FnOnce(&mut Store) -> Result<T>) -> Resul
         *guard = Some(Store::open(root)?);
     }
     f(guard.as_mut().unwrap())
+}
+#[tauri::command]
+async fn open_settings(app: tauri::AppHandle, profile_id: Option<String>) -> Result<()> {
+    // Build WebView2 off the synchronous command thread; serialize duplicate clicks.
+    background(move || {
+        let s = app.state::<AppState>();
+        let _window_lock = s.settings_window.lock().unwrap();
+        if let Some(id) = &profile_id {
+            with_store(&s, |store| store.profile(id).map(|_| ()))?;
+        }
+        if let Some(window) = app.get_webview_window("settings") {
+            window
+                .emit("settings-focus-profile", &profile_id)
+                .map_err(|_| "Cannot update Settings window")?;
+            window
+                .unminimize()
+                .and_then(|_| window.show())
+                .and_then(|_| window.set_focus())
+                .map_err(|_| "Cannot focus Settings window")?;
+        } else {
+            let url = match profile_id {
+                Some(id) => format!("index.html?view=settings&profile={id}"),
+                None => "index.html?view=settings".into(),
+            };
+            tauri::WebviewWindowBuilder::new(&app, "settings", tauri::WebviewUrl::App(url.into()))
+                .title("TMsgPicker 设置")
+                .inner_size(500.0, 580.0)
+                .min_inner_size(420.0, 440.0)
+                .maximizable(false)
+                .center()
+                .build()
+                .map_err(|_| "Cannot open Settings window")?;
+        }
+        Ok(())
+    })
+    .await
+}
+#[tauri::command]
+async fn close_settings(app: tauri::AppHandle) -> Result<()> {
+    background(move || {
+        if let Some(window) = app.get_webview_window("settings") {
+            window.close().map_err(|_| "Cannot close Settings window")?;
+        }
+        Ok(())
+    })
+    .await
+}
+#[tauri::command]
+fn save_ui_preferences(s: State<AppState>, card_compact: bool) -> Result<()> {
+    with_store(&s, |store| store.set_card_compact(card_compact))
+}
+fn route_window_close(label: &str, main_close: impl FnOnce()) {
+    if label == "main" {
+        main_close();
+    }
 }
 #[tauri::command]
 fn app_settings(s: State<AppState>) -> Result<Snapshot> {
@@ -595,6 +651,26 @@ mod tests {
         assert!(!s.closing.load(Ordering::SeqCst));
     }
     #[test]
+    fn auxiliary_window_close_is_not_an_application_exit() {
+        let s = AppState::default();
+        s.epoch.store(9, Ordering::SeqCst);
+        s.pending
+            .lock()
+            .unwrap()
+            .insert("1:2".into(), "Pending".into());
+        for label in ["settings", "other"] {
+            route_window_close(label, || {
+                panic!("auxiliary close must never call the session exit handler")
+            });
+        }
+        assert_eq!(s.epoch.load(Ordering::SeqCst), 9);
+        assert!(!s.closing.load(Ordering::SeqCst));
+        assert_eq!(s.pending.lock().unwrap().len(), 1);
+        let called = AtomicBool::new(false);
+        route_window_close("main", || called.store(true, Ordering::SeqCst));
+        assert!(called.load(Ordering::SeqCst));
+    }
+    #[test]
     fn pending_sends_and_submission_block_transitions() {
         let s = AppState::default();
         s.pending
@@ -750,14 +826,16 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .on_window_event(|window, event| {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let app = window.app_handle();
-                if app.state::<AppState>().gateway.lock().unwrap().is_some() {
+                route_window_close(window.label(), || {
                     api.prevent_close();
-                    begin_safe_exit(app);
-                }
+                    begin_safe_exit(window.app_handle());
+                });
             }
         })
         .invoke_handler(tauri::generate_handler![
+            open_settings,
+            close_settings,
+            save_ui_preferences,
             app_settings,
             save_settings,
             save_layout,

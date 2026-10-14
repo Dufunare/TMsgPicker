@@ -1,17 +1,17 @@
 
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import { listen, type UnlistenFn } from '@tauri-apps/api/event';
+import { listen, emit, type UnlistenFn } from '@tauri-apps/api/event';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { inject } from 'vue';
 import type { Chat, Connection, FieldName, Filter, ForwardReport, Post, QuerySpec, ScanResult, SettingsSnapshot } from './types';
 
-export function useWorkspace() {
+export function useWorkspace(settingsView = false) {
 const connection = ref<Connection>({ profile_id:null, generation:0, auth_state: 'Disconnected', connection_state: 'Disconnected', detail: '请输入配置并连接' });
 const ready = computed(() => connection.value.auth_state === 'authorizationStateReady');
 const busy = ref(false), error = ref(''), accountError = ref(''), chatError = ref(''), notice = ref('');
-const snapshot=ref<SettingsSnapshot|null>(null), profileId=ref(''), settingsOpen=ref(false), rememberDatabase=ref(false), leftRatio=ref(.23), rightRatio=ref(.29);
-let sessionToken=0, layoutTimer:ReturnType<typeof setTimeout>|undefined;
+const snapshot=ref<SettingsSnapshot|null>(null), profileId=ref(''), cardCompact=ref(false), rememberDatabase=ref(false), leftRatio=ref(.23), rightRatio=ref(.29);
+let sessionToken=0, chatTimer:ReturnType<typeof setTimeout>|undefined;
 const dialog=ref<{title:string;text:string;input?:string;allowDelete?:boolean}|null>(null);
 let dialogResolve:((value:{text:string;deleteData:boolean}|null)=>void)|null=null;
 function askDialog(options:NonNullable<typeof dialog.value>){return new Promise<{text:string;deleteData:boolean}|null>(resolve=>{dialog.value=options;dialogResolve=resolve;});}
@@ -32,39 +32,54 @@ const authLabel = computed(() => ({ authorizationStateWaitPhoneNumber: '手机�
 const unlisteners: UnlistenFn[] = [];
 const sendUpdates = new Map<string, string>();
 async function action(fn: () => Promise<void>) { error.value=''; busy.value=true; try { await fn(); } catch (e) { error.value=String(e); } finally { busy.value=false; } }
-function clearSession() { sessionToken++; currentRun.value=''; scanning.value=false;chatList.value=[];selectedChat.value=null;result.value=null;selected.value=[];target.value='';confirmation.value=false;confirmedSelection=null;preview.value=null;report.value=null;reportTarget.value='';sendUpdates.clear();authValue.value=''; }
-async function accountAction(fn:()=>Promise<void>){accountError.value='';busy.value=true;try{await fn();}catch(e){accountError.value=String(e);}finally{busy.value=false;}}
+function clearSession() { sessionToken++; currentRun.value=''; scanning.value=false;chatList.value=[];selectedChat.value=null;result.value=null;selected.value=[];target.value='';search.value='';chatError.value='';confirmation.value=false;confirmedSelection=null;preview.value=null;report.value=null;reportTarget.value='';sendUpdates.clear();authValue.value=''; }
+async function accountAction(fn:()=>Promise<void>){accountError.value='';busy.value=true;try{await fn();await emit('workspace-settings-changed',{source:settingsView?'settings':'main'});}catch(e){accountError.value=String(e);}finally{busy.value=false;}}
 async function refreshSettings(){snapshot.value=await invoke<SettingsSnapshot>('app_settings');}
 async function connect() {
   if(!profileId.value){accountError.value='请添加或选择账号';return;}
   if(report.value?.items.some(i=>i.state==='Pending')){accountError.value='仍有 Pending 发送，请等待最终状态';return;}
   clearSession();
-  await accountAction(async()=>{await invoke('connect',{config:{profile_id:profileId.value,passphrase:passphrase.value||null,remember_database:rememberDatabase.value}});await refreshSettings();});
-  passphrase.value='';
+  await accountAction(async()=>{await invoke('connect',{config:{profile_id:profileId.value,passphrase:passphrase.value||null,remember_database:rememberDatabase.value}});await refreshSettings();rememberDatabase.value=snapshot.value?.profiles.find(p=>p.profile_id===profileId.value)?.has_saved_database_secret??false;});
+  passphrase.value='';if(!settingsView&&ready.value)scheduleChats();
 }
 async function submitAuth(){const value=authValue.value;authValue.value='';await accountAction(async()=>{await invoke('auth_submit',{value});});}
 async function disconnect(){await accountAction(async()=>{await invoke('disconnect');clearSession();});}
 async function addAccount(){await accountAction(async()=>{profileId.value=await invoke<string>('add_account',{name:'新账号'});rememberDatabase.value=false;await refreshSettings();});await selectAccount(true);}
 async function selectAccount(activate=false){
   rememberDatabase.value=snapshot.value?.profiles.find(p=>p.profile_id===profileId.value)?.has_saved_database_secret??false;passphrase.value='';
-  if(!activate || profileId.value===connection.value.profile_id)return;
+  if(!activate || (profileId.value===connection.value.profile_id&&ready.value))return;
   if(report.value?.items.some(i=>i.state==='Pending')||forwarding.value){profileId.value=connection.value.profile_id??'';accountError.value='仍有未确认的发送，暂时不能切换账号';return;}
   if(rememberDatabase.value){await connect();return;}
   if(connection.value.auth_state!=='Disconnected'){
     await accountAction(async()=>{await invoke('disconnect');clearSession();});
     if(accountError.value){profileId.value=connection.value.profile_id??'';return;}
   }else clearSession();
+  if(!settingsView)await openSettings();
 }
+async function openSettings(){try{await invoke('open_settings',{profileId:profileId.value||null});}catch(e){accountError.value=String(e);}}
+async function closeSettings(){try{await invoke('close_settings');}catch(e){accountError.value=String(e);}}
+async function connectFromCard(){if(rememberDatabase.value)await connect();else await openSettings();}
+async function toggleCard(){const compact=!cardCompact.value;try{await invoke('save_ui_preferences',{cardCompact:compact});cardCompact.value=compact;if(snapshot.value)snapshot.value.settings.card_compact=compact;await emit('workspace-settings-changed',{source:settingsView?'settings':'main'});}catch(e){accountError.value=String(e);}}
+watch(authLabel,value=>{if(value&&!settingsView)void openSettings();});
 async function renameAccount(){const id=profileId.value;const answer=await askDialog({title:'账号重命名',text:'此名称仅在本机使用。',input:snapshot.value?.profiles.find(p=>p.profile_id===id)?.display_name??''});if(!answer?.text.trim())return;await accountAction(async()=>{snapshot.value=await invoke('rename_account',{profileId:id,name:answer.text.trim()});});}
 async function removeAccount(){const id=profileId.value;const profile=snapshot.value?.profiles.find(p=>p.profile_id===id);const answer=await askDialog({title:'移除本地账号',text:`移除「${profile?.display_name}」的 Profile 和保存口令。默认保留 Session 文件；此操作不执行 Telegram 登出。`,allowDelete:!profile?.is_legacy_profile});if(!answer)return;let deleteConfirmed=false;if(answer.deleteData){deleteConfirmed=!!await askDialog({title:'永久删除本地 Session',text:`再次确认删除「${profile?.display_name}」的数据库与下载文件？此操作不可撤销；再次使用需要登录。`});if(!deleteConfirmed)return;}await accountAction(async()=>{snapshot.value=await invoke('remove_account',{profileId:id,confirmed:true,deleteData:answer.deleteData,deleteConfirmed});profileId.value=snapshot.value?.settings.last_profile_id??'';selectAccount();});}
 async function logoutAccount(){const id=connection.value.profile_id;const profile=snapshot.value?.profiles.find(p=>p.profile_id===id);if(!id||!await askDialog({title:'退出 Telegram 登录',text:`退出「${profile?.display_name}」？TDLib 将清除该授权的本地数据，之后需要重新登录。其他 Profile 不受影响。`}))return;await accountAction(async()=>{await invoke('logout_account',{profileId:id,confirmed:true});clearSession();});}
-async function saveSettings(){await accountAction(async()=>{if(!snapshot.value)return;snapshot.value=await invoke('save_settings',{edit:{settings:{...snapshot.value.settings,api_id:apiId.value?Number(apiId.value):null,proxy_enabled:proxyEnabled.value,proxy_server:proxyHost.value,proxy_port:proxyPort.value,proxy_username:proxyUser.value},api_hash:apiHash.value||null,proxy_password:proxyPassword.value||null}});notice.value='配置已保存；连接时应用。';});apiHash.value='';proxyPassword.value='';}
-async function clearSecret(key:string){await accountAction(async()=>{snapshot.value=await invoke('clear_secret',{key});if(key.startsWith('db:'))rememberDatabase.value=false;if(key==='proxy')proxyUser.value='';notice.value='?????????????????????????????';});}
+async function saveSettings(){await accountAction(async()=>{if(!snapshot.value)return;const latest=await invoke<SettingsSnapshot>('app_settings');snapshot.value=await invoke('save_settings',{edit:{settings:{...latest.settings,api_id:apiId.value?Number(apiId.value):null,proxy_enabled:proxyEnabled.value,proxy_server:proxyHost.value,proxy_port:proxyPort.value,proxy_username:proxyUser.value},api_hash:apiHash.value||null,proxy_password:proxyPassword.value||null}});notice.value='配置已保存；连接时应用。';});apiHash.value='';proxyPassword.value='';}
+async function clearSecret(key:string){await accountAction(async()=>{snapshot.value=await invoke('clear_secret',{key});if(key.startsWith('db:'))rememberDatabase.value=false;if(key==='proxy')proxyUser.value='';notice.value='保存凭据已清除；下一次连接应用变更。';});}
 async function resetSettings(){await accountAction(async()=>{snapshot.value=await invoke('reset_settings');applySettings();});}
-function applySettings(){const s=snapshot.value?.settings;if(!s)return;apiId.value=s.api_id?.toString()??'';proxyEnabled.value=s.proxy_enabled;proxyHost.value=s.proxy_server;proxyPort.value=s.proxy_port;proxyUser.value=s.proxy_username;leftRatio.value=s.left_ratio;rightRatio.value=s.right_ratio;}
-function resizeLayout(left:number,right:number){leftRatio.value=left;rightRatio.value=right;if(snapshot.value){snapshot.value.settings.left_ratio=left;snapshot.value.settings.right_ratio=right;}clearTimeout(layoutTimer);layoutTimer=setTimeout(()=>{invoke('save_layout',{left,right}).catch(e=>{accountError.value=String(e);});},250);}
-function resetLayout(){resizeLayout(.23,.29);}
+function applySettings(){const s=snapshot.value?.settings;if(!s)return;apiId.value=s.api_id?.toString()??'';proxyEnabled.value=s.proxy_enabled;proxyHost.value=s.proxy_server;proxyPort.value=s.proxy_port;proxyUser.value=s.proxy_username;leftRatio.value=s.left_ratio;rightRatio.value=s.right_ratio;cardCompact.value=s.card_compact;}
+async function persistLayout(){try{await invoke('save_layout',{left:leftRatio.value,right:rightRatio.value});await emit('workspace-settings-changed',{source:settingsView?'settings':'main'});}catch(e){accountError.value=String(e);}}
+function resizeLayout(left:number,right:number){leftRatio.value=left;rightRatio.value=right;if(snapshot.value){snapshot.value.settings.left_ratio=left;snapshot.value.settings.right_ratio=right;}}
+function resetLayout(){resizeLayout(.23,.29);void persistLayout();}
 async function chatAction(fn:()=>Promise<void>){chatError.value='';busy.value=true;try{await fn();}catch(e){chatError.value=String(e);}finally{busy.value=false;}}
+function scheduleChats(attempt=0){
+  if(settingsView)return;clearTimeout(chatTimer);const token=sessionToken;
+  chatTimer=setTimeout(async()=>{
+    if(token!==sessionToken||!ready.value)return;
+    try{const list=await invoke<Chat[]>('chats',{search:search.value});if(token===sessionToken){chatList.value=list;chatError.value='';}}
+    catch(e){if(token!==sessionToken)return;if(String(e).includes('Session operation in progress')&&attempt<5)scheduleChats(attempt+1);else chatError.value=String(e);}
+  },150);
+}
 async function loadChats() { await chatAction(async () => {const token=sessionToken;const list=await invoke<Chat[]>('chats',{search:search.value});if(token===sessionToken)chatList.value=list;}); }
 async function resolvePublic() { await chatAction(async () => {const token=sessionToken;const c=await invoke<Chat>('public_chat',{username:search.value}); if(token!==sessionToken)return; if (!chatList.value.some(x=>x.id===c.id)) chatList.value.unshift(c); selectedChat.value=c;}); }
 async function savedMessages() { await action(async () => {const token=sessionToken;const c=await invoke<Chat>('saved_messages');if(token!==sessionToken)return;if (!chatList.value.some(x=>x.id===c.id)) chatList.value.push(c);target.value=c.id;confirmation.value=false;confirmedSelection=null;}); }
@@ -105,19 +120,35 @@ function date(seconds:number) {return new Date(seconds*1000).toLocaleString();}
 onMounted(async () => {
   if(!isTauri()) {accountError.value='请通过 pnpm tauri dev 启动桌面程序；浏览器预览无法连接 TDLib。';return;}
   try {
-    unlisteners.push(await listen<Connection>('connection',e=>{if(e.payload.generation<connection.value.generation)return;if(e.payload.generation!==connection.value.generation)clearSession();connection.value=e.payload;}));
+    unlisteners.push(await listen<Connection>('connection',e=>{
+      const previous=connection.value;
+      if(e.payload.generation<previous.generation)return;
+      if(e.payload.generation!==previous.generation)clearSession();
+      connection.value=e.payload;
+      if(e.payload.generation!==previous.generation&&e.payload.profile_id&&e.payload.auth_state!=='Disconnected'&&e.payload.auth_state!=='authorizationStateClosed'){
+        profileId.value=e.payload.profile_id;void selectAccount();
+      }
+      if(!settingsView&&e.payload.auth_state==='authorizationStateReady'&&previous.auth_state!=='authorizationStateReady')scheduleChats();
+    }));
     unlisteners.push(await listen<ScanResult>('query-progress',e=>{if(e.payload.run_id!==currentRun.value)return;result.value=e.payload;scanning.value=e.payload.status==='Scanning';selected.value=selected.value.filter(key=>e.payload.posts.some(p=>p.key===key));}));
     unlisteners.push(await listen<string>('app-error',e=>{accountError.value=e.payload;}));
-    unlisteners.push(await listen('accounts-changed',()=>{refreshSettings().catch(e=>{accountError.value=String(e);});}));
+    unlisteners.push(await listen<{source:string}>('workspace-settings-changed',async e=>{
+      if(e.payload.source===(settingsView?'settings':'main'))return;
+      try{await refreshSettings();cardCompact.value=snapshot.value?.settings.card_compact??false;leftRatio.value=snapshot.value?.settings.left_ratio??leftRatio.value;rightRatio.value=snapshot.value?.settings.right_ratio??rightRatio.value;if(!settingsView){applySettings();if(!snapshot.value?.profiles.some(p=>p.profile_id===profileId.value)){profileId.value=snapshot.value?.settings.last_profile_id??'';}void selectAccount();if(ready.value&&!chatList.value.length)scheduleChats();}}catch(e){accountError.value=String(e);}
+    }));
+    if(settingsView)unlisteners.push(await listen<string|null>('settings-focus-profile',async e=>{
+      try{await refreshSettings();if(e.payload&&profileId.value!==e.payload&&snapshot.value?.profiles.some(p=>p.profile_id===e.payload)){profileId.value=e.payload;void selectAccount();}}catch(e){accountError.value=String(e);}
+    }));
+    unlisteners.push(await listen('accounts-changed' ,()=>{refreshSettings().catch(e=>{accountError.value=String(e);});}));
     unlisteners.push(await listen<string>('account-notice',e=>{notice.value=e.payload;}));
     unlisteners.push(await listen<{target:string;old_message_id:string;state:string;generation:number}>('forward-update',e=>{if(e.payload.generation!==connection.value.generation)return;sendUpdates.set(`${e.payload.target}:${e.payload.old_message_id}`,e.payload.state);if(e.payload.target===reportTarget.value)for(const item of report.value?.items ?? [])if(item.sent_id===e.payload.old_message_id)item.state=e.payload.state;}));
     connection.value=await invoke<Connection>('connection_status');
-    await refreshSettings();applySettings();profileId.value=snapshot.value?.settings.last_profile_id??snapshot.value?.profiles[0]?.profile_id??'';selectAccount();
+    await refreshSettings();applySettings();const requested=settingsView?new URLSearchParams(window.location.search).get('profile'):null;profileId.value=(requested&&snapshot.value?.profiles.some(p=>p.profile_id===requested)?requested:null)??connection.value.profile_id??snapshot.value?.settings.last_profile_id??snapshot.value?.profiles[0]?.profile_id??'';await selectAccount();if(ready.value&&!settingsView)void loadChats();if(authLabel.value&&!settingsView)void openSettings();
   } catch(e) {accountError.value=String(e);}
 });
-onUnmounted(()=>{unlisteners.forEach(fn=>fn());clearTimeout(layoutTimer);answerDialog(null);});
+onUnmounted(()=>{unlisteners.forEach(fn=>fn());clearTimeout(chatTimer);answerDialog(null);});
 
-return { dialog,answerDialog,connection,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,preset,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,settingsOpen,rememberDatabase,leftRatio,rightRatio,addAccount,selectAccount,renameAccount,removeAccount,logoutAccount,saveSettings,clearSecret,resetSettings,resetLayout,resizeLayout };
+return { dialog,answerDialog,connection,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,preset,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,cardCompact,openSettings,closeSettings,connectFromCard,toggleCard,persistLayout,rememberDatabase,leftRatio,rightRatio,addAccount,selectAccount,renameAccount,removeAccount,logoutAccount,saveSettings,clearSecret,resetSettings,resetLayout,resizeLayout };
 }
 export type Workspace = ReturnType<typeof useWorkspace>;
 export const workspaceKey=Symbol("workspace");

@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "settings",
+  "description": "Local Settings window event access; no raw TDLib or secret-read capability",
+  "windows": ["settings"],
+  "permissions": ["core:default"]
+}
