@@ -10,7 +10,7 @@ use std::{
 
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(default)]
-pub struct Settings {
+pub struct ApplicationConfig {
     pub schema_version: u32,
     pub api_id: Option<i32>,
     pub proxy_enabled: bool,
@@ -22,7 +22,7 @@ pub struct Settings {
     pub right_ratio: f64,
     pub card_compact: bool,
 }
-impl Default for Settings {
+impl Default for ApplicationConfig {
     fn default() -> Self {
         Self {
             schema_version: 1,
@@ -39,14 +39,20 @@ impl Default for Settings {
     }
 }
 #[derive(Clone, Serialize, Deserialize)]
-pub struct Profile {
+pub struct AccountProfile {
     pub profile_id: String,
     pub telegram_user_id: Option<String>,
     pub display_name: String,
     pub username: Option<String>,
     pub is_legacy_profile: bool,
     pub last_used_at: u64,
+    #[serde(default)]
+    pub session_directory_id: String,
+    #[serde(default)]
+    pub created_at: u64,
 }
+pub type Settings = ApplicationConfig;
+pub type Profile = AccountProfile;
 #[derive(Default, Serialize, Deserialize)]
 struct Disk {
     settings: Settings,
@@ -67,9 +73,57 @@ pub struct ProfileView {
     pub profile: Profile,
     pub has_saved_database_secret: bool,
 }
+#[derive(Default, Serialize, Deserialize)]
+pub struct ApplicationConfigService {
+    value: ApplicationConfig,
+}
+impl ApplicationConfigService {
+    pub fn settings(&self) -> ApplicationConfig {
+        self.value.clone()
+    }
+    pub fn validate(settings: &Settings) -> Result<()> {
+        if settings.schema_version != 1
+            || settings.api_id.is_some_and(|n| n <= 0)
+            || settings.proxy_port == 0
+            || !settings.left_ratio.is_finite()
+            || !settings.right_ratio.is_finite()
+            || !(0.02..=0.9).contains(&settings.left_ratio)
+            || !(0.02..=0.9).contains(&settings.right_ratio)
+        {
+            return Err("Invalid settings".into());
+        }
+        Ok(())
+    }
+    fn replace(&mut self, settings: ApplicationConfig) -> Result<()> {
+        Self::validate(&settings)?;
+        self.value = settings;
+        Ok(())
+    }
+    fn select(&mut self, id: Option<String>) {
+        self.value.last_profile_id = id;
+    }
+}
+#[derive(Default, Serialize, Deserialize)]
+pub struct AccountRegistry {
+    profiles: Vec<AccountProfile>,
+    legacy_imported: bool,
+}
+#[derive(Default, Serialize, Deserialize)]
+pub struct AccountCredentialStore {
+    secrets: BTreeMap<String, Vec<u8>>,
+}
+// Process-local credential view. Never serialize plaintext or return it through IPC.
+pub struct AccountCredentials {
+    pub profile_id: String,
+    pub session_root: PathBuf,
+    pub remember_database: bool,
+    pub passphrase: Option<String>,
+}
 pub struct Store {
     pub root: PathBuf,
-    disk: Disk,
+    config: ApplicationConfigService,
+    registry: AccountRegistry,
+    credentials: AccountCredentialStore,
 }
 pub fn now() -> u64 {
     SystemTime::now()
@@ -81,7 +135,7 @@ impl Store {
     pub fn open(root: PathBuf) -> Result<Self> {
         fs::create_dir_all(&root).map_err(|_| "Cannot create settings directory")?;
         let path = root.join("settings.json");
-        let disk: Disk = if path.exists() {
+        let disk: Disk = if !root.join("app-config.json").exists() && path.exists() {
             serde_json::from_slice(&fs::read(path).map_err(|_| "Cannot read settings")?)
                 .map_err(|_| "Settings file is damaged; restore a backup before continuing")?
         } else {
@@ -90,21 +144,65 @@ impl Store {
         if disk.settings.schema_version != 1 {
             return Err("Unsupported settings version".into());
         }
-        let mut s = Self { root, disk };
-        if !s.disk.legacy_imported && s.root.join("tdlib/db").exists() {
-            s.disk.profiles.push(Profile {
+        let mut s = if root.join("app-config.json").exists() {
+            fn read<T: serde::de::DeserializeOwned>(path: PathBuf) -> Result<T> {
+                serde_json::from_slice(
+                    &fs::read(path).map_err(|_| "Cannot read application storage")?,
+                )
+                .map_err(|_| "Application storage damaged; restore a valid backup".into())
+            }
+            Self {
+                config: ApplicationConfigService {
+                    value: read(root.join("app-config.json"))?,
+                },
+                registry: read(root.join("accounts.json"))?,
+                credentials: read(root.join("credential-store.json"))?,
+                root,
+            }
+        } else {
+            // Keep the original settings.json as a non-destructive migration backup.
+            Self {
+                root,
+                config: ApplicationConfigService {
+                    value: disk.settings,
+                },
+                registry: AccountRegistry {
+                    profiles: disk.profiles,
+                    legacy_imported: disk.legacy_imported,
+                },
+                credentials: AccountCredentialStore {
+                    secrets: disk.secrets,
+                },
+            }
+        };
+        if s.config.value.schema_version != 1 {
+            return Err("Unsupported settings version".into());
+        }
+        for p in &mut s.registry.profiles {
+            if p.session_directory_id.is_empty() {
+                p.session_directory_id = if p.is_legacy_profile {
+                    "legacy".into()
+                } else {
+                    p.profile_id.clone()
+                };
+            }
+        }
+        if !s.registry.legacy_imported && s.root.join("tdlib/db").exists() {
+            s.registry.profiles.push(Profile {
                 profile_id: "legacy".into(),
                 telegram_user_id: None,
                 display_name: "已有账号 (Legacy)".into(),
                 username: None,
                 is_legacy_profile: true,
                 last_used_at: 0,
+                session_directory_id: "legacy".into(),
+                created_at: now(),
             });
-            s.disk.settings.last_profile_id = Some("legacy".into());
-            s.disk.legacy_imported = true;
+            s.config.select(Some("legacy".into()));
+            s.registry.legacy_imported = true;
         }
         let mut ids = std::collections::BTreeSet::new();
-        for p in &s.disk.profiles {
+        for p in &s.registry.profiles {
             if !ids.insert(&p.profile_id) {
                 return Err("Duplicate Profile ID in settings; restore a valid backup".into());
             }
@@ -114,22 +212,50 @@ impl Store {
         Ok(s)
     }
     fn save(&self) -> Result<()> {
-        let path = self.root.join("settings.json");
-        let temp = self.root.join("settings.json.tmp");
-        let bytes =
-            serde_json::to_vec_pretty(&self.disk).map_err(|_| "Cannot serialize settings")?;
-        let mut f = fs::File::create(&temp).map_err(|_| "Cannot write settings")?;
-        f.write_all(&bytes)
-            .and_then(|_| f.sync_all())
-            .map_err(|_| "Cannot flush settings")?;
-        drop(f);
-        replace(&temp, &path)
+        fn write(root: &Path, name: &str, value: &impl Serialize) -> Result<()> {
+            let path = root.join(name);
+            let temp = root.join(format!("{name}.tmp"));
+            let bytes = serde_json::to_vec_pretty(value).map_err(|_| "Cannot serialize storage")?;
+            let mut f = fs::File::create(&temp).map_err(|_| "Cannot write storage")?;
+            f.write_all(&bytes)
+                .and_then(|_| f.sync_all())
+                .map_err(|_| "Cannot flush storage")?;
+            drop(f);
+            replace(&temp, &path)
+        }
+        write(&self.root, "credential-store.json", &self.credentials)?;
+        write(&self.root, "accounts.json", &self.registry)?;
+        write(&self.root, "app-config.json", &self.config.value)
+    }
+    pub fn profile_ids(&self) -> Vec<String> {
+        self.registry
+            .profiles
+            .iter()
+            .map(|p| p.profile_id.clone())
+            .collect()
+    }
+    pub fn account_credentials(
+        &self,
+        id: &str,
+        input: Option<String>,
+    ) -> Result<AccountCredentials> {
+        let session_root = self.session_root(id)?;
+        let key = format!("db:{id}");
+        Ok(AccountCredentials {
+            profile_id: id.into(),
+            session_root,
+            remember_database: self.has(&key),
+            passphrase: match input.filter(|s| !s.is_empty()) {
+                Some(value) => Some(value),
+                None => self.secret(&key)?,
+            },
+        })
     }
     pub fn snapshot(&self) -> Snapshot {
         Snapshot {
-            settings: self.disk.settings.clone(),
+            settings: self.config.value.clone(),
             profiles: self
-                .disk
+                .registry
                 .profiles
                 .iter()
                 .map(|p| ProfileView {
@@ -142,20 +268,34 @@ impl Store {
         }
     }
     pub fn settings(&self) -> Settings {
-        self.disk.settings.clone()
+        self.config.settings()
+    }
+    pub fn validate_settings(settings: &Settings) -> Result<()> {
+        ApplicationConfigService::validate(settings)
     }
     pub fn set_settings(&mut self, settings: Settings) -> Result<()> {
-        if settings.schema_version != 1
-            || settings.api_id.is_some_and(|n| n <= 0)
-            || settings.proxy_port == 0
-            || !settings.left_ratio.is_finite()
-            || !settings.right_ratio.is_finite()
-            || !(0.02..=0.9).contains(&settings.left_ratio)
-            || !(0.02..=0.9).contains(&settings.right_ratio)
-        {
-            return Err("Invalid settings".into());
+        Self::validate_settings(&settings)?;
+        self.config.replace(settings)?;
+        self.save()
+    }
+    pub fn edit_application_config(
+        &mut self,
+        settings: Settings,
+        api: Option<String>,
+        proxy: Option<String>,
+    ) -> Result<()> {
+        Self::validate_settings(&settings)?;
+        let mut secrets = self.credentials.secrets.clone();
+        for (key, value) in [("api", api), ("proxy", proxy)] {
+            if let Some(value) = value {
+                if value.is_empty() {
+                    return Err("Credential cannot be empty".into());
+                }
+                secrets.insert(key.into(), protect(value.as_bytes(), true)?);
+            }
         }
-        self.disk.settings = settings;
+        self.credentials.secrets = secrets;
+        self.config.replace(settings)?;
         self.save()
     }
     pub fn set_card_compact(&mut self, compact: bool) -> Result<()> {
@@ -164,11 +304,11 @@ impl Store {
         self.set_settings(settings)
     }
     pub fn reset(&mut self) -> Result<()> {
-        self.disk.settings = Settings::default();
+        self.config.replace(Settings::default())?;
         self.save()
     }
     pub fn profile(&self, id: &str) -> Result<&Profile> {
-        self.disk
+        self.registry
             .profiles
             .iter()
             .find(|p| p.profile_id == id)
@@ -187,7 +327,13 @@ impl Store {
         {
             return Err("Invalid account directory identifier".into());
         }
-        Ok(self.root.join("tdlib/accounts").join(id))
+        if p.session_directory_id != id {
+            return Err("Invalid Session ownership".into());
+        }
+        Ok(self
+            .root
+            .join("tdlib/accounts")
+            .join(&p.session_directory_id))
     }
     pub fn add(&mut self, name: String) -> Result<String> {
         if name.trim().is_empty() || name.len() > 200 {
@@ -200,13 +346,20 @@ impl Store {
                 .unwrap_or_default()
                 .as_nanos()
         );
-        self.disk.profiles.push(Profile {
+        if self.registry.profiles.iter().any(|p| p.profile_id == id)
+            || self.root.join("tdlib/accounts").join(&id).exists()
+        {
+            return Err("Account directory already exists; retry creating account".into());
+        }
+        self.registry.profiles.push(Profile {
             profile_id: id.clone(),
             telegram_user_id: None,
             display_name: name,
             username: None,
             is_legacy_profile: false,
             last_used_at: 0,
+            session_directory_id: id.clone(),
+            created_at: now(),
         });
         self.save()?;
         Ok(id)
@@ -216,7 +369,7 @@ impl Store {
             return Err("Invalid account name".into());
         }
         self.profile(id)?;
-        self.disk
+        self.registry
             .profiles
             .iter_mut()
             .find(|p| p.profile_id == id)
@@ -226,7 +379,7 @@ impl Store {
     }
     pub fn select(&mut self, id: &str) -> Result<()> {
         self.profile(id)?;
-        self.disk.settings.last_profile_id = Some(id.into());
+        self.config.select(Some(id.into()));
         self.save()
     }
     pub fn identify(&mut self, id: &str, user: &serde_json::Value) -> Result<bool> {
@@ -235,18 +388,23 @@ impl Store {
             .ok_or("Invalid Telegram identity")?
             .to_string();
         let duplicate = self
-            .disk
+            .registry
             .profiles
             .iter()
             .any(|p| p.profile_id != id && p.telegram_user_id.as_ref() == Some(&uid));
         self.profile(id)?;
+        if duplicate {
+            return Ok(true);
+        }
         let p = self
-            .disk
+            .registry
             .profiles
             .iter_mut()
             .find(|p| p.profile_id == id)
             .unwrap();
-        if p.telegram_user_id.is_none() {
+        if p.telegram_user_id.is_none()
+            && (p.display_name == "新账号" || p.display_name == "已有账号 (Legacy)")
+        {
             p.display_name = format!(
                 "{} {}",
                 user["first_name"].as_str().unwrap_or(""),
@@ -265,10 +423,10 @@ impl Store {
     }
     pub fn remove(&mut self, id: &str) -> Result<()> {
         self.profile(id)?;
-        self.disk.profiles.retain(|p| p.profile_id != id);
-        self.disk.secrets.remove(&format!("db:{id}"));
-        if self.disk.settings.last_profile_id.as_deref() == Some(id) {
-            self.disk.settings.last_profile_id = None;
+        self.registry.profiles.retain(|p| p.profile_id != id);
+        self.credentials.secrets.remove(&format!("db:{id}"));
+        if self.config.value.last_profile_id.as_deref() == Some(id) {
+            self.config.select(None);
         }
         self.save()
     }
@@ -331,10 +489,10 @@ impl Store {
         fs::remove_dir_all(&target).map_err(|_| "Cannot delete local Session data".into())
     }
     pub fn has(&self, key: &str) -> bool {
-        self.disk.secrets.contains_key(key)
+        self.credentials.secrets.contains_key(key)
     }
     pub fn secret(&self, key: &str) -> Result<Option<String>> {
-        self.disk
+        self.credentials
             .secrets
             .get(key)
             .map(|v| {
@@ -352,11 +510,11 @@ impl Store {
             if v.is_empty() {
                 return Err("Credential cannot be empty".into());
             }
-            self.disk
+            self.credentials
                 .secrets
                 .insert(key.into(), protect(v.as_bytes(), true)?);
         } else {
-            self.disk.secrets.remove(key);
+            self.credentials.secrets.remove(key);
         }
         self.save()
     }
@@ -499,6 +657,8 @@ mod tests {
         let me = serde_json::json!({"id":12345,"first_name":"Synthetic"});
         assert!(!s.identify(&a, &me).unwrap());
         assert!(s.identify(&b, &me).unwrap());
+        assert!(s.profile(&b).unwrap().telegram_user_id.is_none());
+        assert_eq!(s.profile(&b).unwrap().display_name, "B");
         assert_ne!(s.session_root(&a).unwrap(), s.session_root(&b).unwrap());
         fs::create_dir_all(s.session_root(&a).unwrap().join("db")).unwrap();
         s.delete_session(&a).unwrap();
@@ -507,12 +667,119 @@ mod tests {
         assert!(root.join("tdlib/db").exists());
         fs::remove_dir_all(root).unwrap();
     }
+    #[test]
+    fn empty_registry_and_unsaved_key_never_create_or_rebuild_session_directories() {
+        let root = temp_root();
+        let mut s = Store::open(root.clone()).unwrap();
+        assert!(s.profile_ids().is_empty());
+        assert!(!root.join("tdlib").exists());
+        let id = s.add("Synthetic".into()).unwrap();
+        let credentials = s.account_credentials(&id, None).unwrap();
+        assert_eq!(credentials.profile_id, id);
+        assert!(!credentials.remember_database);
+        assert!(credentials.passphrase.is_none());
+        assert!(!credentials.session_root.exists());
+        let registry: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join("accounts.json")).unwrap()).unwrap();
+        assert!(registry["profiles"][0].get("api_id").is_none());
+        assert!(registry["profiles"][0].get("proxy_enabled").is_none());
+        assert!(registry["profiles"][0].get("client_id").is_none());
+        assert!(s.profile(&id).unwrap().created_at > 0);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn v1_migration_preserves_config_identity_ciphertexts_and_original_database() {
+        let root = temp_root();
+        fs::create_dir_all(root.join("tdlib/db")).unwrap();
+        fs::write(root.join("tdlib/db/synthetic.db"), b"original-db").unwrap();
+        let mut disk = Disk::default();
+        disk.settings.api_id = Some(1234);
+        disk.settings.card_compact = true;
+        #[cfg(windows)]
+        disk.secrets.insert(
+            "db:legacy".into(),
+            protect(b"synthetic-legacy-passphrase", true).unwrap(),
+        );
+        let original = serde_json::to_vec(&disk).unwrap();
+        fs::write(root.join("settings.json"), &original).unwrap();
+        let mut s = Store::open(root.clone()).unwrap();
+        assert_eq!(s.profile_ids(), vec!["legacy"]);
+        assert_eq!(s.session_root("legacy").unwrap(), root.join("tdlib"));
+        assert_eq!(s.settings().api_id, Some(1234));
+        assert!(s.settings().card_compact);
+        #[cfg(windows)]
+        assert_eq!(
+            s.account_credentials("legacy", None)
+                .unwrap()
+                .passphrase
+                .as_deref(),
+            Some("synthetic-legacy-passphrase")
+        );
+        assert_eq!(fs::read(root.join("settings.json")).unwrap(), original);
+        assert_eq!(
+            fs::read(root.join("tdlib/db/synthetic.db")).unwrap(),
+            b"original-db"
+        );
+        s.remove("legacy").unwrap();
+        let s = Store::open(root.clone()).unwrap();
+        assert!(s.profile_ids().is_empty()); // Removal does not re-import the retained database.
+        assert!(root.join("tdlib/db/synthetic.db").exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn profile_credentials_and_decryption_failure_are_isolated() {
+        let root = temp_root();
+        let mut s = Store::open(root.clone()).unwrap();
+        let a = s.add("A".into()).unwrap();
+        let b = s.add("B".into()).unwrap();
+        s.set_secret(&format!("db:{a}"), Some("synthetic-A".into()))
+            .unwrap();
+        s.set_secret(&format!("db:{b}"), Some("synthetic-B".into()))
+            .unwrap();
+        assert_eq!(
+            s.account_credentials(&a, None)
+                .unwrap()
+                .passphrase
+                .as_deref(),
+            Some("synthetic-A")
+        );
+        assert_eq!(
+            s.account_credentials(&b, None)
+                .unwrap()
+                .passphrase
+                .as_deref(),
+            Some("synthetic-B")
+        );
+        s.credentials
+            .secrets
+            .insert(format!("db:{a}"), vec![1, 2, 3]);
+        assert!(s.account_credentials(&a, None).is_err());
+        assert_eq!(
+            s.account_credentials(&b, None)
+                .unwrap()
+                .passphrase
+                .as_deref(),
+            Some("synthetic-B")
+        );
+        assert_eq!(
+            s.account_credentials(&a, Some("replacement".into()))
+                .unwrap()
+                .passphrase
+                .as_deref(),
+            Some("replacement")
+        );
+        s.set_secret(&format!("db:{a}"), None).unwrap();
+        assert!(!s.account_credentials(&a, None).unwrap().remember_database);
+        assert!(s.account_credentials(&b, None).unwrap().remember_database);
+        fs::remove_dir_all(root).unwrap();
+    }
     #[cfg(windows)]
     #[test]
     fn damaged_secret_requires_manual_replacement_and_clear() {
         let root = temp_root();
         let mut s = Store::open(root.clone()).unwrap();
-        s.disk.secrets.insert("api".into(), vec![1, 2, 3]);
+        s.credentials.secrets.insert("api".into(), vec![1, 2, 3]);
         s.save().unwrap();
         assert!(s.secret("api").is_err());
         s.set_secret("api", Some("synthetic-replacement".into()))
@@ -533,7 +800,13 @@ mod tests {
         settings.left_ratio = 0.27;
         settings.right_ratio = 0.31;
         store.set_settings(settings).unwrap();
-        let mut old = serde_json::to_value(&store.disk).unwrap();
+        let mut old = serde_json::to_value(Disk {
+            settings: store.settings(),
+            profiles: store.registry.profiles.clone(),
+            legacy_imported: store.registry.legacy_imported,
+            secrets: store.credentials.secrets.clone(),
+        })
+        .unwrap();
         old["settings"]
             .as_object_mut()
             .unwrap()
@@ -578,7 +851,7 @@ mod tests {
             s.set_secret(&format!("db:{a}"), Some("synthetic-db-secret".into()))
                 .unwrap();
             assert_eq!(s.secret("api").unwrap().unwrap(), "synthetic-api-secret");
-            let disk = fs::read_to_string(root.join("settings.json")).unwrap();
+            let disk = fs::read_to_string(root.join("credential-store.json")).unwrap();
             assert!(!disk.contains("synthetic"));
             assert!(
                 !serde_json::to_string(&s.snapshot())
@@ -589,7 +862,7 @@ mod tests {
         let mut s = Store::open(root.clone()).unwrap();
         assert_eq!(s.settings().api_id, Some(123));
         assert_eq!(
-            s.disk
+            s.registry
                 .profiles
                 .iter()
                 .filter(|p| p.is_legacy_profile)

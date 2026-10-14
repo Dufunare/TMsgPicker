@@ -1,4 +1,4 @@
-# Tauri IPC — 三栏与多账号迭代
+# Tauri IPC — 常驻多账号 Runtime（2026-10-14）
 
 生产接口仅接受业务 DTO，不允许前端提交任意 TDLib JSON。类型见 `src/types.ts`，Rust 定义见 `core.rs` / `services.rs` / `app.rs`。所有 ID 为十进制字符串，所有日期为 UTC Unix 秒；指标缺失序列化为 null。
 
@@ -8,18 +8,20 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 
 | 命令 | 参数 | 返回 |
 |---|---|---|
-| `connection_status` | 无 | `{profile_id,generation,auth_state,connection_state,detail}` |
-| `connect` | `{config:{profile_id,passphrase:string|null,remember_database:boolean}}` | 安全关闭旧 Gateway、等待 Closed 和线程 join 后激活指定 Profile；从后端设置及 DPAPI 凭据初始化，仍按序先提交代理、参数再等待 |
-| `auth_submit` | `{value}` | 按当前授权状态提交手机号/代码/密码/邮箱 |
-| `disconnect` | 无 | 取消查询，close 并等待 authorizationStateClosed |
-| `chats` | `{search}` | `Chat[]`；空字符串加载列表，非空搜索已知聊天 |
-| `public_chat` | `{username}` | 公开 Chat，支持输入 @ 前缀 |
-| `saved_messages` | 无 | getMe + createPrivateChat 解析出的 Chat |
-| `start_query` | `{spec,runId}` | 立即启动后台扫描；结果由事件发送 |
-| `cancel_query` | `{runId}` | 仅取消对应活动 run；等待中的请求最多约 50ms 检查取消 |
-| `message_link` | `{key:{chat_id,message_id},album}` | TDLib 返回且通过协议检查的 URL |
-| `preview_forward` | `{target,postKeys,runId}` | `ForwardReport`，只预检不发送 |
-| `forward_selected` | `{target,postKeys,runId,confirmed:true}` | `ForwardReport`；校验选择属于最近查询结果，再重新检查权限 |
+| `connection_status` | `{profileId}` | `{profile_id,generation,runtime_state,auth_state,connection_state,detail}` |
+| `account_statuses` | 无 | 全部 Profile 的 Connection 快照；不含 Client ID |
+| `select_profile` | `{profileId}` | 只保存上次查看的 Profile；不创建、初始化、关闭或注销 Client |
+| `connect` | `{config:{profile_id,passphrase:string|null,remember_database:boolean}}` | 解锁指定账号的未初始化 Client；如已 Closed 则重建此 Client；不影响其他 Profile。所有 Client 共用后端全局配置 |
+| `auth_submit` | `{profileId,value}` | 按指定账号实际授权状态提交手机号／代码／密码／邮箱 |
+| `disconnect` | `{profileId}` | 只取消此账号查询、close 并等 Closed；不注销、不删除目录 |
+| `chats` | `{profileId,search}` | `Chat[]`；空字符串加载列表，非空搜索已知聊天 |
+| `public_chat` | `{profileId,username}` | 公开 Chat，支持 @ 前缀 |
+| `saved_messages` | `{profileId}` | 此账号 getMe + createPrivateChat 解析出的 Chat |
+| `start_query` | `{profileId,spec,runId}` | 启动此账号后台扫描；新 run 只取消同账号旧 run |
+| `cancel_query` | `{profileId,runId}` | 只取消此账号对应 run；请求每约 50ms 检查取消 |
+| `message_link` | `{profileId,key:{chat_id,message_id},album}` | TDLib 返回且通过协议检查的 URL |
+| `preview_forward` | `{profileId,target,postKeys,runId}` | `ForwardReport`，只预检不发送 |
+| `forward_selected` | `{profileId,target,postKeys,runId,confirmed:true}` | `ForwardReport`；只验证此账号的查询结果、选择及权限 |
 
 ## 设置与账号命令
 
@@ -29,21 +31,21 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 | `close_settings` | 无 | 仅关闭 settings，不触发会话关闭 |
 | `save_ui_preferences` | `{cardCompact:boolean}` | 仅保存折叠偏好，保留 API、Profile、秘密与布局 |
 | `app_settings` | 无 | `SettingsSnapshot`，仅非敏感字段及 has_saved_* |
-| `save_settings` | `{edit:{settings,api_hash:string|null,proxy_password:string|null}}` | Snapshot；秘密 null 表示保持，非空值更新 DPAPI 密文；Gateway 运行时拒绝 |
+| `save_settings` | `{edit:{settings,api_hash:string|null,proxy_password:string|null}}` | Snapshot；秘密 null 保持；安全关闭全部 Client 后统一保存并并发重建。保留最新布局／折叠／上次查看偏好。各账号失败通过 connection 事件报告 |
 | `save_layout` | `{left:number,right:number}` | 保存列宽比例，连接期间允许 |
-| `reset_settings` | 无 | Snapshot；须先断开，仅重置普通配置 |
-| `clear_secret` | `{key:"api"\|"proxy"\|"db:<profile_id>"}` | Snapshot；删除 DPAPI 密文，proxy 同时清空用户名；运行中的连接不受影响 |
-| `add_account` | `{name}` | 内部 Profile ID；独立路径，不接受前端目录 |
+| `reset_settings` | 无 | Snapshot；安全关闭／重建全部账号，仅重置普通配置，保留凭据／Profile／Session |
+| `clear_secret` | `{key:"api"\|"proxy"\|"db:<profile_id>"}` | Snapshot；全局秘密清除会安全重建全部 Client，proxy 同时清空用户名；清除 db 只取消对应保存副本，当前解锁会话不关闭 |
+| `add_account` | `{name}` | 内部 Profile ID；持久化独立 Profile，创建等待数据库口令的 Client；不接受前端目录 |
 | `rename_account` | `{profileId,name}` | Snapshot，本地别名 |
-| `remove_account` | `{profileId,confirmed,deleteData,deleteConfirmed}` | Snapshot；活动账号须先断开，默认保留数据，删除数据要求第二次确认并验证归属；拒绝删除 Legacy 数据 |
-| `logout_account` | `{profileId,confirmed:true}` | 仅当前 Ready 账号；logOut 后等待 Closed 和线程结束，普通断开不调用此命令 |
+| `remove_account` | `{profileId,confirmed,deleteData,deleteConfirmed}` | Snapshot；先安全关闭指定账号，默认保留 Session；删除数据要求二次确认和路径归属检查，禁止删除 Legacy |
+| `logout_account` | `{profileId,confirmed:true}` | 指定已授权账号，UI 和后端均要求确认；logOut 后等 TDLib 自行 Closed，不追加 close；其他账号继续运行 |
 
 `Settings = {schema_version:1,api_id,proxy_enabled,proxy_server,proxy_port,proxy_username,last_profile_id,left_ratio,right_ratio,card_compact}`。
 
 `SettingsSnapshot = {settings,profiles,has_saved_api_hash,has_saved_proxy_password}`。
-Profile 字段为 `profile_id,telegram_user_id:string|null,display_name,username:string|null,is_legacy_profile,last_used_at,has_saved_database_secret`。首次授权前 Telegram ID 为空；Ready 后 getMe 更新身份。username/Telegram ID 只作为元数据，不构造 Session 路径。
+Profile 字段为 `profile_id,telegram_user_id:string|null,display_name,username:string|null,session_directory_id,is_legacy_profile,created_at,last_used_at,has_saved_database_secret`。首次授权前 Telegram ID 为空；Ready 后 getMe 更新身份。重复身份不写入冲突 Profile，安全断开并提示显式移除；原账号不受影响。Session 标识由后端产生，任何业务命令都不接受 Client ID 或文件路径。
 
-秘密和配置优先级：后端保存设置/DPAPI 秘密优先，缺少 API 设置时使用环境变量。数据库口令手工输入优先于对应 Profile 保存的口令；`remember_database=false` 清除保存值，不改变传入的口令。保存状态 IPC 不解密，不返回真实秘密。DPAPI 解密失败明确报错，用户可手工覆盖数据库口令或清除/重新设置全局凭据。验证码/2FA 不保存。
+秘密和配置优先级：全局设置／DPAPI 秘密优先，缺少 API 设置时使用环境变量。数据库口令手工输入优先于此 Profile 的保存值；只有初始化成功后按 remember_database 保存／清除副本。UI 取消记住会立即调用 clear_secret 清除副本。保存状态 IPC 不解密、不返回秘密。DPAPI 解密失败只影响对应账号的解锁，手工输入可覆盖失败的保存副本。验证码／2FA 不保存。
 
 `TelegramGateway.request_batch` 在等待前按序提交所有请求，返回值保持提交顺序；先等待最后的参数请求，以便参数错误立即返回并清理其余 pending。TDLib 将初始化前的 addProxy/disableProxy 排队，因此不可用单条阻塞 request 先等待代理确认。代理请求成功仅表示设置被接受，不表示网络连接成功。
 
@@ -76,28 +78,30 @@ Profile 字段为 `profile_id,telegram_user_id:string|null,display_name,username
 
 | 事件 | 负载 / 行为 |
 |---|---|
-| `connection` | 包含 profile_id 和递增 generation，以及授权状态类型、连接状态类型和通用提示；不广播原始手机号/验证码/邮箱/密码提示 |
-| `query-progress` | `ScanResult = {run_id,status,scanned,pages,exact,detail,posts}`；status 为 Scanning/Partial/Complete/Cancelled/Error |
-| `forward-update` | `{generation,target,old_message_id,state:"Sent"|"Failed"}`；对应发送临时 ID |
+| `connection` | `{profile_id,generation,runtime_state,auth_state,connection_state,detail}`；不广播原始手机号／验证码／邮箱／密码提示 |
+| `query-progress` | `{profile_id,generation,result:ScanResult}`；ScanResult 保持 `{run_id,status,scanned,pages,exact,detail,posts}`，status 为 Scanning／Partial／Complete／Cancelled／Error |
+| `forward-update` | `{profile_id,generation,target,old_message_id,state:"Sent"|"Failed"}`；对应发送临时 ID |
 | `workspace-settings-changed` | `{source:"main"\|"settings"}`；前端发送不含秘密的刷新通知，另一窗口重新通过 app_settings 读取非敏感状态；不作为会话授权依据 |
 | `settings-focus-profile` | `string|null`；后端仅向 settings 窗口发送要显示的 Profile；相同账号仅聚焦，不清空输入 |
 | `accounts-changed` | 无敏感负载；前端重新读取 app_settings，刷新 getMe 更新后的 Profile |
-| `account-notice` | 重复 Telegram 身份或元数据保存失败的通用提示 |
+| `account-notice` | `{profile_id,detail}`；重复 Telegram 身份或元数据保存失败的提示 |
 | `app-error` | 安全关闭失败时的短错误；保持进程，允许重试 |
 
-前端应先注册监听再启动命令；只应用等于当前 run_id 的扫描事件，后台同样检查活动 run。开始新查询自动取消旧 run，旧请求的迟到响应不会覆盖新结果。
+前端先注册监听，再读取 account_statuses 捕获启动期间已经发生的状态变化。所有账号事件写入对应 Profile 缓存；query-progress 必须同时匹配此 Profile 的 generation 和 run_id。后台执行相同验证。新查询只取消同账号旧 run；切换视图不取消任何查询。
 
 `LogicalPost` 包括 key、kind、members、representative、date、text、metrics、provenance、partial。members 是规范化的 TelegramMessage，包含字符串联合 ID、content_kind、caption/text、media_album_id 和快照 metrics。provenance 为字段到 source_message_id 的映射。
 
 ReactionKey 序列化为 `{kind:"emoji"|"custom_emoji"|"paid"|"unknown",value?}`。所有非 Unicode 反应保留类型和计数。反应对象缺失为 null，已知为空为 `[]`。reaction_total 汇总同一个指标来源内的 reaction 计数，绝不跨 Album 成员累加。
 
-`ForwardReport = {items:[{source:{chat_id,message_id},state,detail,sent_id}]}`。预检为 Allowed/Rejected；执行为 Rejected/Failed/Pending/Sent。Pending 不代表送达，监听 forward-update 并按 target + 临时 sent_id 匹配；进程不持久化动作记录。
+`ForwardReport = {items:[{source:{chat_id,message_id},state,detail,sent_id}]}`。预检为 Allowed/Rejected；执行为 Rejected/Failed/Pending/Sent。Pending 不代表送达，forward-update 按 Profile ID、generation、target、临时 sent_id 匹配；进程不持久化动作记录。
 
 ## 会话并发约束
 
-Lifecycle mutex 串行连接、授权、关闭、查询启动、预检/转发与依赖会话的读取。扫描继续使用独立取消标记和 run ID；切换前取消并失效结果，关闭失败保持 Gateway 且禁止业务调用，不启动第二个客户端。唯一 native ACTIVE 守卫继续生效。接收回调捕获 generation，过期回调不写状态，连接/转发事件带 generation；查询事件沿用原 ScanResult DTO，以 generation + run ID 在后端过滤，以当前 run ID 在前端过滤。前端聊天异步响应也检查会话 token。
+AppState 持全局生命周期 RwLock，普通业务持读锁，各账号独立 lifecycle Mutex，不跨账号串行业务。全局重建／退出持写锁。每个 Runtime 独立 epoch、扫描取消标志、结果与 Pending 转发。关闭失败保留此 Gateway 和失败原因，不在原目录强开新 Client。
 
-已提交发送与扫描取消分开：后台维护 Pending 临时消息 ID，收到 Sent/Failed 更新后解除；有提交中或 Pending 发送时拒绝切换、断开和窗口退出，用户等待最终状态后重试。不会把 Pending 误报为 Sent。退出应用与切换抢占同一 lifecycle 锁，冲突时提示重试。
+整个进程只有一个 SharedReceiver。先验证 @client_id 对应存活 ClientSlot，再通过专属 Router 的 @extra 匹配 Pending；两级键等价于 (client_id, request_tag)。Closed 只清理该 Client 的 Pending，全部 Client Closed 后才停止并 join 共享接收线程。重建获得新 Client ID／generation，旧 Client 消息和旧 generation 回调安全丢弃。
+
+Pending 临时消息 ID 按账号隔离，收到 Sent／Failed 后解除；指定账号有 Pending 时拒绝其断开／移除／注销，全局设置和退出须等待全部 Pending。切换视图始终允许，不调用生命周期 IPC。应用退出先拒绝新任务，全部提交 close 后并发等待 Closed；正常退出不调用 logOut。详情见 [Runtime 架构](RUNTIME_ARCHITECTURE.md)。
 
 ## 多窗口生命周期（第二轮 UI）
 

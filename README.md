@@ -20,17 +20,19 @@ pnpm.cmd tauri dev
 
 主窗口为左侧 Account & Chats、中间 Messages & Results、右侧 Query Builder。两条分界线保留 6px 透明命中区，默认只有极淡细线，Hover/Focus/Drag 显示半透明 1px 提示；可拖动，也可聚焦后按左右方向键调整、Home 重置；Settings「安全与界面」中提供重置布局。小于 1060 CSS px 时查询栏变成可打开的侧边抽屉。
 
-左上用户卡片显示姓名、username 与状态，右侧图标提供添加、切换和更多操作；卡片底部小箭头可收缩到 Compact 模式并记住偏好。卡片外侧齿轮打开独立的 500 × 580 Settings 小窗；重复点击聚焦已有窗口，关闭小窗不会断开 TDLib。API/代理、数据库口令和手机号/验证码/2FA 授权均在小窗中处理，不占用聊天列表。保存配置优先于 `TMSGPICKER_API_ID` / `TMSGPICKER_API_HASH` 环境变量，未配置时使用环境变量；密码输入框留空保留已保存值，明确的清除按钮删除保存值。API/代理修改前必须安全断开；新设置在下一次连接生效。配置重置仅重置普通设置，不删除账号、秘密或 Session。
+左上用户卡片显示姓名、username 与状态，右侧图标提供添加、切换和更多操作；卡片底部小箭头可收缩到 Compact 模式并记住偏好。卡片外侧齿轮打开独立的 500 × 580 Settings 小窗；重复点击聚焦已有窗口，关闭小窗不会断开 TDLib。API/代理、数据库口令和手机号/验证码/2FA 授权均在小窗中处理，不占用聊天列表。保存配置优先于 `TMSGPICKER_API_ID` / `TMSGPICKER_API_HASH` 环境变量，未配置时使用环境变量；密码输入框留空保留已保存值，明确的清除按钮删除保存值。保存 API/代理配置会安全关闭并重建全部账号；各账号的失败原因独立显示。已解锁账号可用本进程内口令恢复，未解锁账号仍需口令。配置重置只重置普通设置，保留账号、秘密与 Session；同样重建全部账号。
 
-普通设置、Profile 元数据和 **DPAPI 密文**保存在 `%LOCALAPPDATA%\com.funare.tmsgpicker\settings.json`，schema version 为 1。写入经过 flush 和 Windows 原子替换；损坏或未来版本文件明确报错且不覆盖。API Hash、代理密码和可选数据库口令仅由 Rust 使用当前 Windows 用户范围 DPAPI 加密/解密，读取 IPC 只返回保存状态，秘密不会回填 Vue。验证码、手机号授权输入和 2FA 不持久化。保护失败需清除该保存凭据并重新输入，不降级为明文。请不要提交或分享凭据、Session 或配置文件。
+数据位于 `%LOCALAPPDATA%\com.funare.tmsgpicker\`：`app-config.json` 保存唯一应用配置，`accounts.json` 保存账号注册表，`credential-store.json` 只保存当前 Windows 用户范围的 DPAPI 密文。旧 `settings.json` 非破坏迁移后保留为原始备份，后续不再读取它。各文件写入经过 flush 和 Windows 原子替换；损坏或未来版本明确报错。API Hash、代理密码和可选数据库口令仅由 Rust 解密，读取 IPC 只返回保存标志，不回填 Vue。数据库口令按 Profile ID 隔离，仅初始化成功后保存；验证码和 2FA 不持久化。保护失败需清除对应保存凭据并重新输入，不降级为明文。
 
 首次升级检测 `tdlib/db` 后幂等导入 Legacy Profile，继续使用原来的 `tdlib/db` 和 `tdlib/files`，不迁移、覆盖或删除。数据库密码必须使用原有 passphrase；仍按原规则 Base64 编码为 TDLib bytes（Base64 不等于加密）。新账号使用 `tdlib/accounts/<内部 Profile ID>/db` 与 `files`。默认手工输入口令；只有用户勾选「记住此设备」才保存 DPAPI 密文，取消勾选立即清除保存口令而保留数据库。
 
-「添加账号」创建独立 Profile。选择其他账号时，已记住口令可顺序关闭并恢复；未记住则安全断开旧会话，输入所选账号口令再连接。普通断开/切换使用 `close`，保留 Telegram Session；「退出 Telegram 登录」经过确认调用 `logOut`，TDLib 会清除该授权的本地数据。移除 Profile 默认保留 Session 文件；新 Profile 可选择二次确认删除本地数据，后端检查目录归属和重解析点，Legacy 目录不允许由此删除。重复登录同一 Telegram 用户会提示重复 Profile，目录始终隔离，不自动合并。
+启动时为全部已登记 Profile 创建独立 TDLib Client，并发初始化具备保存口令的账号。没有保存口令的 Client 保持“需要解锁”，不提交数据库参数，不生成新密钥。注册表为空时显示“添加账号”，不创建匿名 Client。整个桌面进程只有一个共享 `td_receive` 线程。
+
+「添加账号」创建独立 Profile 和 Client；选择账号只切换前端视图，全部客户端继续运行，后台查询继续，切回恢复该账号的聊天、查询条件、结果与选择。普通断开和退出应用使用 `close`；只有经确认的「退出 Telegram 登录」调用 `logOut`，随后等待 TDLib 自行关闭。移除 Profile 默认保留 Session 文件；本地数据删除需二次确认、安全关闭及目录归属／重解析点检查，Legacy 目录不可由此删除。重复 `getMe` 身份不写入冲突 Profile，冲突账号安全断开并提示显式移除；已有账号与目录保持完整。
 
 SOCKS5 服务器填写主机（如 `127.0.0.1`），端口使用实际 SOCKS5/Mixed 监听端口；未设置代理认证时用户名和密码留空。TDLib 不自动跟随 Windows 的 HTTP 代理。
 
-初始化顺序：先发送 `addProxy(enable=true)`，或没有代理时发送 `disableProxy`，随后立即发送 `setTdlibParameters`，两条都发出后再等待响应。**不能先等代理响应再提交参数**：代理 API 可在授权前调用，但在 `authorizationStateWaitTdlibParameters` 阶段会排队，等待参数初始化。初始化失败先报告 `setTdlibParameters` 错误并清理 pending，不再被代理请求阻塞 45 秒；代理配置成功也不表示 Telegram 已连通，应查看连接状态。修改代理/API 配置前先安全断开。手机号、验证码、2FA 和邮箱授权由 Settings 小窗提交；额外授权步骤显示明确提示，不自动重试验证码。
+每个 Client 的初始化顺序：先发送 `addProxy(enable=true)` 或 `disableProxy`，随后立即发送 `setTdlibParameters`，两条都发出后再等待响应。**不能先等代理响应再提交参数**：代理请求在缺少参数时排队。先等待参数响应，参数失败清理其余 Pending，不被代理阻塞 45 秒。代理设置成功不表示网络已连通，授权状态与连接状态独立显示。用户选中需要处理的账号后手动打开 Settings 完成授权，不会为多个后台账号自动弹窗。
 
 ## 查询语义
 
@@ -60,6 +62,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib --tests
 cargo check --manifest-path src-tauri/Cargo.toml --all-targets
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 pnpm.cmd build
+pnpm.cmd test # Node 22.18+ / 24，Vue 内存渲染器；不访问 Telegram
 ```
 
 现有 `src-tauri/src/bin/tdlib_smoke.rs` / `tdlib_auth.rs` 保持可用。`tdlib_auth` 是原有手动工具，代理设置及打印方式仍采用原来的 bring-up 代码；日常使用新的桌面授权服务，不将旧 CLI 的输出当作可分享诊断。
@@ -68,7 +71,7 @@ pnpm.cmd build
 
 ## 开发接口与部署限制
 
-命令、事件和 DTO 见 [IPC 接口](docs/IPC.md)。Gateway 请求由唯一 dedicated receive 线程按 `@client_id` / `@extra` 路由，后台线程执行网络与扫描，UI 仅用 `invoke`/事件；没有 HTTP 服务或生产 mock 数据。
+命令、事件和 DTO 见 [IPC 接口](docs/IPC.md)，数据结构、状态机、调用流程及本轮手动验收见 [Runtime 架构与验收](docs/RUNTIME_ARCHITECTURE.md)。所有账号业务 IPC 显式携带 Profile ID；共享接收线程先按 `@client_id` 找到 Client 专属 Router，再按 `@extra` 匹配响应。后台线程执行网络与扫描，UI 仅用 `invoke`／事件。
 
 当前只完成开发期 native staging，尚未制作/验收 MSI、NSIS 安装包。后续部署需打包相同版本的 TDLib/OpenSSL/zlib DLL，验证 MSVC 运行库、WebView2、更新机制与许可证。`pnpm tauri build` 的安装包分发不属于已验证项。
 
