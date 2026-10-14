@@ -61,6 +61,7 @@ struct AppState {
 struct PendingLogin {
     profile_id: String,
     phone: Option<String>,
+    phone_submitting: bool,
     remember_database: bool,
     newly_created: bool,
 }
@@ -439,6 +440,20 @@ fn update(app: &tauri::AppHandle, profile_id: &str, epoch: u64, v: Value) {
         return;
     }
     if let Some((connection, ready)) = apply_connection(&s, epoch, &v) {
+        if v["@type"] == "updateAuthorizationState"
+            && !matches!(
+                connection.auth_state.as_str(),
+                "authorizationStateWaitTdlibParameters" | "authorizationStateWaitPhoneNumber"
+            )
+            && let Some(login) = global
+                .pending_login
+                .lock()
+                .unwrap()
+                .as_mut()
+                .filter(|p| p.profile_id == profile_id)
+        {
+            login.phone_submitting = false;
+        }
         let _ = app.emit("connection", connection);
         if ready {
             let handle = app.clone();
@@ -469,6 +484,15 @@ fn update(app: &tauri::AppHandle, profile_id: &str, epoch: u64, v: Value) {
                         AuthService::submit(g.as_ref(), "authorizationStateWaitPhoneNumber", phone)
                     });
                     if let Err(error) = outcome {
+                        if let Some(login) = global
+                            .pending_login
+                            .lock()
+                            .unwrap()
+                            .as_mut()
+                            .filter(|p| p.profile_id == runtime.profile_id)
+                        {
+                            login.phone_submitting = false;
+                        }
                         let _ = handle.emit("login-error", error);
                     }
                 }
@@ -2121,6 +2145,7 @@ pub fn run() {
             open_login,
             begin_login,
             login_status,
+            login_auth_submit,
             retry_login_identity,
             cancel_login,
             #[cfg(debug_assertions)]

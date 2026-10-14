@@ -68,8 +68,8 @@ test('wizard submits actual TDLib authorization state and clears transient input
   login.phone.value='+123456789';login.passphrase.value='synthetic key';login.remember.value=true;
   await login.begin();assert.equal(login.phone.value,'');assert.equal(login.passphrase.value,'');assert.equal(login.label.value,'Telegram 验证码');
   assert.deepEqual(calls[0],{command:'begin_login',args:{config:{phone:'+123456789',passphrase:'synthetic key',remember_database:true,recovery_profile_id:null}}});
-  login.value.value='synthetic code';await login.submit();assert.equal(login.value.value,'');
-  assert.deepEqual(calls.find(c=>c.command==='auth_submit'),{command:'auth_submit',args:{profileId:'pending',value:'synthetic code'}});
+  login.value.value='synthetic code';login.twoFactorPassword.value='synthetic 2FA';await login.submit();assert.equal(login.value.value,'');assert.equal(login.twoFactorPassword.value,'');
+  assert.deepEqual(calls.find(c=>c.command==='login_auth_submit'),{command:'login_auth_submit',args:{profileId:'pending',generation:1,authState:'authorizationStateWaitCode',code:'synthetic code',password:'synthetic 2FA'}});
   await login.cancel();assert.equal(calls.at(-1)?.command,'cancel_login');
   assert.equal(calls.some(c=>c.command==='logout_account'),false);
 });

@@ -34,7 +34,8 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 | `settings_target` | 无 | `{tab:"application"\|"account",profile_id:string|null}`；设置窗口先监听导航，再读取最新目标，补偿创建／监听间隙；不写入配置或注册表 |
 | `open_login` | 无 | 打开／聚焦唯一 `login` 窗口；不创建正式账号，也不跳转到设置 |
 | `begin_login` | `{config:{phone,passphrase,remember_database,recovery_profile_id:string|null}}` | Profile ID；验证全局 API，分配唯一 ID 和最终隔离目录，创建 PendingLogin / Client 并初始化。只有 Ready 和 getMe 去重成功才正式登记。phone 仅保留在内存到实际 WaitPhoneNumber；recovery ID 仅允许已有待恢复记录，必须复用原目录和原密码 |
-| `login_status` | 无 | `Connection|null`；当前 PendingLogin 快照，先监听再读取 |
+| `login_status` | 无 | `(Connection & {phone_submitting:boolean})\|null`；当前 PendingLogin 快照，先监听再读取；自动提交手机号期间仅展示等待，拒绝时允许修正 |
+| `login_auth_submit` | `{profileId,generation,authState,code,password}` | 仅当前 PendingLogin Client，校验账号、generation 和实际授权状态。验证码与可选 2FA 密码一次提交，后端按 checkAuthenticationCode → 观察实际状态 → 仅 WaitPassword 时 checkAuthenticationPassword 顺序执行。无 2FA 不发送密码；验证码错误不发送密码；WaitPassword 重试只验证密码。输入仅用于本次内存请求，不持久化 |
 | `retry_login_identity` | 无 | Ready 后重试 getMe / 去重 / 原子登记；错误通过 `login-error` 告知，保持 PendingLogin |
 | `cancel_login` | 无 | close → Closed → 清理本次新建的独立 Session 和待登录记录；取消旧记录恢复只关闭 Client、保留原数据。绝不 logOut |
 | `app_settings` | 无 | `SettingsSnapshot`，仅非敏感字段及 has_saved_* |

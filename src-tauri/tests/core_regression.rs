@@ -17,6 +17,144 @@ struct MockTelegramGateway {
     requests: Mutex<Vec<Value>>,
     cancel_history: bool,
 }
+#[test]
+fn combined_login_enforces_tdlib_code_then_optional_password_and_handles_rejections() {
+    struct LoginMock {
+        steps: Mutex<VecDeque<(&'static str, Result<Value>)>>,
+        requests: Mutex<Vec<Value>>,
+    }
+    impl TelegramGateway for LoginMock {
+        fn request(&self, request: Value, _: &AtomicBool) -> Result<Value> {
+            let (expected, reply) = self
+                .steps
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("unexpected request");
+            assert_eq!(request["@type"], expected);
+            self.requests.lock().unwrap().push(request);
+            reply
+        }
+        fn request_batch(&self, _: Vec<Value>, _: &AtomicBool) -> Result<Vec<Value>> {
+            unreachable!()
+        }
+    }
+    let state = |name: &str| Ok(json!({"@type":name}));
+    let mock = |steps: Vec<(&'static str, Result<Value>)>| LoginMock {
+        steps: Mutex::new(steps.into()),
+        requests: Mutex::new(Vec::new()),
+    };
+    let g = mock(vec![
+        ("getAuthorizationState", state("authorizationStateWaitCode")),
+        ("checkAuthenticationCode", state("ok")),
+        ("getAuthorizationState", state("authorizationStateWaitCode")),
+        (
+            "getAuthorizationState",
+            state("authorizationStateWaitPassword"),
+        ),
+        ("checkAuthenticationPassword", state("ok")),
+    ]);
+    AuthService::submit_login(
+        &g,
+        "authorizationStateWaitCode",
+        "synthetic code".into(),
+        "synthetic password".into(),
+    )
+    .unwrap();
+    let requests = g.requests.lock().unwrap();
+    assert_eq!(requests[1]["code"], "synthetic code");
+    assert_eq!(requests[4]["password"], "synthetic password");
+    drop(requests);
+    let no_2fa = mock(vec![
+        ("getAuthorizationState", state("authorizationStateWaitCode")),
+        ("checkAuthenticationCode", state("ok")),
+        ("getAuthorizationState", state("authorizationStateReady")),
+    ]);
+    AuthService::submit_login(
+        &no_2fa,
+        "authorizationStateWaitCode",
+        "synthetic code".into(),
+        "unused password".into(),
+    )
+    .unwrap();
+    let wrong_code = mock(vec![
+        ("getAuthorizationState", state("authorizationStateWaitCode")),
+        (
+            "checkAuthenticationCode",
+            Err("synthetic wrong code".into()),
+        ),
+    ]);
+    assert!(
+        AuthService::submit_login(
+            &wrong_code,
+            "authorizationStateWaitCode",
+            "wrong".into(),
+            "must not submit".into()
+        )
+        .is_err()
+    );
+    let missing_password = mock(vec![
+        ("getAuthorizationState", state("authorizationStateWaitCode")),
+        ("checkAuthenticationCode", state("ok")),
+        (
+            "getAuthorizationState",
+            state("authorizationStateWaitPassword"),
+        ),
+    ]);
+    AuthService::submit_login(
+        &missing_password,
+        "authorizationStateWaitCode",
+        "synthetic code".into(),
+        String::new(),
+    )
+    .unwrap();
+    let wrong_password = mock(vec![
+        (
+            "getAuthorizationState",
+            state("authorizationStateWaitPassword"),
+        ),
+        (
+            "checkAuthenticationPassword",
+            Err("synthetic wrong password".into()),
+        ),
+    ]);
+    assert!(
+        AuthService::submit_login(
+            &wrong_password,
+            "authorizationStateWaitPassword",
+            String::new(),
+            "wrong".into()
+        )
+        .is_err()
+    );
+    let retry = mock(vec![
+        (
+            "getAuthorizationState",
+            state("authorizationStateWaitPassword"),
+        ),
+        ("checkAuthenticationPassword", state("ok")),
+    ]);
+    AuthService::submit_login(
+        &retry,
+        "authorizationStateWaitPassword",
+        "never resend code".into(),
+        "synthetic password".into(),
+    )
+    .unwrap();
+    let stale = mock(vec![(
+        "getAuthorizationState",
+        state("authorizationStateWaitPassword"),
+    )]);
+    assert!(
+        AuthService::submit_login(
+            &stale,
+            "authorizationStateWaitCode",
+            "must not send".into(),
+            "must not send".into()
+        )
+        .is_err()
+    );
+}
 impl SessionLifecycle for MockTelegramGateway {
     fn begin_close(&self) {
         self.requests.lock().unwrap().push(json!({"@type":"close"}));

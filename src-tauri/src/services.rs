@@ -85,6 +85,58 @@ impl LogoutProgress {
     }
 }
 impl AuthService {
+    /// One UI submission, with TDLib's code -> optional password states enforced.
+    pub fn submit_login(
+        g: &dyn TelegramGateway,
+        expected_state: &str,
+        code: String,
+        password: String,
+    ) -> Result<()> {
+        let cancel = AtomicBool::new(false);
+        let state = g.request(json!({"@type":"getAuthorizationState"}), &cancel)?;
+        if state["@type"].as_str() != Some(expected_state) {
+            return Err("Authorization step changed; review the current login form".into());
+        }
+        match expected_state {
+            "authorizationStateWaitPassword" => {
+                if password.is_empty() {
+                    return Err("请输入 Telegram 两步验证密码".into());
+                }
+                return Self::submit(g, expected_state, password);
+            }
+            "authorizationStateWaitCode" => {
+                if code.trim().is_empty() {
+                    return Err("请输入 Telegram 验证码".into());
+                }
+                Self::submit(g, expected_state, code)?;
+            }
+            _ => return Err("This step does not accept code/password submission".into()),
+        }
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let state = g.request(json!({"@type":"getAuthorizationState"}), &cancel)?;
+            match state["@type"].as_str() {
+                Some("authorizationStateWaitCode") if std::time::Instant::now() < deadline => {
+                    std::thread::sleep(std::time::Duration::from_millis(50))
+                }
+                Some("authorizationStateWaitCode") => {
+                    return Err("验证码已提交，仍在等待授权状态更新，请等待后重试".into());
+                }
+                Some("authorizationStateWaitPassword") if !password.is_empty() => {
+                    return Self::submit(g, "authorizationStateWaitPassword", password);
+                }
+                Some(
+                    "authorizationStateWaitPassword"
+                    | "authorizationStateReady"
+                    | "authorizationStateWaitEmailAddress"
+                    | "authorizationStateWaitEmailCode"
+                    | "authorizationStateWaitOtherDeviceConfirmation"
+                    | "authorizationStateWaitRegistration",
+                ) => return Ok(()),
+                _ => return Err("Telegram returned an unexpected authorization state".into()),
+            }
+        }
+    }
     pub fn end_session(g: &dyn SessionLifecycle, logout: bool) -> Result<()> {
         if logout {
             g.request(json!({"@type":"logOut"}), &AtomicBool::new(false))?;

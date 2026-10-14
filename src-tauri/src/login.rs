@@ -136,6 +136,7 @@ pub(super) async fn begin_login(app: tauri::AppHandle, config: LoginConfig) -> R
         })?;
         *global.pending_login.lock().unwrap() = Some(PendingLogin {
             profile_id: id.clone(),
+            phone_submitting: !config.phone.is_empty(),
             phone: if config.phone.is_empty() {
                 None
             } else {
@@ -159,15 +160,69 @@ pub(super) async fn begin_login(app: tauri::AppHandle, config: LoginConfig) -> R
     .await
 }
 #[tauri::command]
-pub(super) fn login_status(s: State<AppState>) -> Result<Option<Connection>> {
-    let id = s
+pub(super) fn login_status(s: State<AppState>) -> Result<Option<LoginStatus>> {
+    let owner = s
         .pending_login
         .lock()
         .unwrap()
         .as_ref()
-        .map(|p| p.profile_id.clone());
-    id.map(|id| account(&s, &id).map(|r| r.connection.lock().unwrap().clone()))
+        .map(|p| (p.profile_id.clone(), p.phone_submitting));
+    owner
+        .map(|(id, phone_submitting)| {
+            let connection = account(&s, &id)?.connection.lock().unwrap().clone();
+            Ok(LoginStatus {
+                phone_submitting: phone_submitting
+                    && matches!(
+                        connection.auth_state.as_str(),
+                        "authorizationStateWaitTdlibParameters"
+                            | "authorizationStateWaitPhoneNumber"
+                    ),
+                connection,
+            })
+        })
         .transpose()
+}
+#[derive(Serialize)]
+pub(super) struct LoginStatus {
+    #[serde(flatten)]
+    connection: Connection,
+    phone_submitting: bool,
+}
+#[tauri::command]
+pub(super) async fn login_auth_submit(
+    app: tauri::AppHandle,
+    profile_id: String,
+    generation: u64,
+    auth_state: String,
+    code: String,
+    password: String,
+) -> Result<()> {
+    background(move || {
+        let global = app.state::<AppState>();
+        let _gate = global
+            .lifecycle
+            .try_read()
+            .map_err(|_| "Application transition in progress")?;
+        let s = account(&global, &profile_id)?;
+        let _lock = s
+            .lifecycle
+            .try_lock()
+            .map_err(|_| "Session operation in progress")?;
+        if !current_epoch(&s, generation) {
+            return Err("Login session changed; review the current step".into());
+        }
+        if global
+            .pending_login
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_none_or(|p| p.profile_id != profile_id)
+        {
+            return Err("This client is not the pending login".into());
+        }
+        AuthService::submit_login(client(&s)?.as_ref(), &auth_state, code, password)
+    })
+    .await
 }
 #[tauri::command]
 pub(super) async fn retry_login_identity(app: tauri::AppHandle) -> Result<()> {

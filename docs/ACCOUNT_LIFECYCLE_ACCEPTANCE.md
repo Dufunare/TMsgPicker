@@ -7,7 +7,7 @@
 - 无正式账号时不创建默认 Profile，不显示头像、账号选择或更多菜单；左栏只保留添加账号引导与应用设置齿轮。
 - AccountRegistry 的 profiles 仅有 Ready + getMe 成功的账号；pending_profiles 单独保存中断恢复元数据，手机号、验证码、2FA 不写盘。旧未识别 Profile 和 Legacy 保留目录／凭据并移入恢复区。
 - 主账号保存于注册表；合法主账号优先，缺失时一次兼容合法旧 last_profile_id，否则按最早登记顺序回退。查看账号不写盘，不改变主账号，不调用 Client 生命周期。启动仍创建所有正式账号 Runtime；无保存口令的账号等待原数据库密码。
-- 所有添加按钮调用同一 open_login 服务；唯一 LoginWindow 根据真实 TDLib 状态推进。Ready 后 getMe 去重，身份与首次登录选择的 DPAPI 口令原子提交；成功 main 切换账号并加载聊天，Client 继续运行。取消只 close，等待 Closed 后清理本次新建目录；取消旧记录恢复保留原数据。
+- 所有添加按钮调用同一 open_login 服务；唯一 LoginWindow 根据真实 TDLib 状态推进。提交手机号和 Session 密码后显示等待验证码，不重复要求输入手机号。验证码与 2FA 密码在同一表单中填写，后端先验证 code，仅在实际 WaitPassword 状态验证 password；失败可在同一界面重试，验证码错误不提交密码。Ready 后 getMe 去重，身份与首次登录选择的 DPAPI 口令原子提交；成功 main 切换账号并加载聊天，Client 继续运行。取消只 close，等待 Closed 后清理本次新建目录；取消旧记录恢复保留原数据。
 - 更多菜单仅断开／恢复（互斥）与账号设置。主动断开标志独立于网络状态；普通网络断线仍由 TDLib 重连。
 - ApplicationSettings 与 AccountSettings 合并到唯一 settings 窗口，作为两个可切换子页面。ApplicationSettings 保留 API、SOCKS5、全局凭据清除和 Debug 工具的现有选项；AccountSettings 可选择操作账号，只管理只读身份、状态、断开／恢复／注销／添加账号。主窗口选择不重定向设置；切换子页面保留未保存的应用输入，切换操作账号清空临时口令。注销后刷新列表／添加引导，设置关闭不关闭 Client。
 - 注销只作用于指定账号：二次确认、logOut 明确回执及真实 Closed、持久化 logout_completed、专属 Session 清理、删除登记／口令。拒绝、超时或清理失败保留登记；超时继续观察同一 Client 的迟到回执／LoggingOut 和真实 Closed，不重复发 logOut 或追加 close。完成标志仅在 Closed 后保存，旧 logout_pending 不作为完成证据；重启和全局重建不会重新打开已完成注销的 Session。
@@ -34,7 +34,8 @@
 
 | 命令 | 结果 |
 |---|---|
-| pnpm.cmd test | 17 项（含设置导航与迟到目标测试） |
+| pnpm.cmd test | 21 项通过（含设置导航、迟到目标、重复手机号页面消除、同界面 2FA／错误重试、授权事件优先于旧快照） |
+| cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --test core_regression combined_login | 新增组合登录 Mock 测试通过，涵盖实际状态顺序、无 2FA、验证码／密码拒绝、缺密码、密码重试及过期状态 |
 | cargo test --manifest-path src-tauri/Cargo.toml --lib app::tests | 10 项账号生命周期测试通过 |
 | pnpm.cmd build | TypeScript 与 Vite 构建通过 |
 | cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --lib --tests | 23 项核心回归通过；重置及目录单元测试另见下一行 |
@@ -47,6 +48,8 @@
 关键回归覆盖：多账号（含 Legacy、主动断开账号）全部 logOut／Closed 后才全量清理；授权有效的 Pending Client 注销；网络失败保留恢复所需 Session／凭据、重试跳过已完成账号；缺口令和 Closed 超时阻止清理；迟到回执按 Client 隔离且不重复注销／追加 close；旧请求接受标志不作为完成证据；文件占用／删除失败明确返回未完成，释放后可重试；清理后的首次启动空状态；Junction／越界路径拒绝；两次确认及短语匹配、Release 入口排除、逐账号错误展示，以及原有 Pending → Unknown 和视图隔离保护。
 
 ## 尚需人工验证
+
+当前已收到真实手机号登录在验证码页面出现前发生 `TDLib request timed out` 的反馈；根因尚未确认，以上 Mock 验证不代表此问题已修复。
 
 未启动该构建连接用户真实数据。Windows WebView2 下的窗口居中、重复点击聚焦、意外关闭、三栏拖动、DWM 标题栏颜色／边框、不同 Windows 版本降级和系统按钮需本机 GUI 验收。真实手机号、验证码、2FA／邮箱授权、SOCKS5 连通性、有效 Session 重用、实际 getMe 去重和发送回执仍需在用户可控账号／目标上验证。
 

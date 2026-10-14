@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {useLogin} from '../useLogin';
-const {snapshot,connection,phone,passphrase,remember,recoveryId,value,busy,error,label,pending,begin,submit,cancel,openSettings,retryIdentity}=useLogin();
+const {snapshot,connection,phone,passphrase,remember,recoveryId,value,twoFactorPassword,busy,error,label,pending,sendingPhone,combinedAuth,begin,submit,cancel,openSettings,retryIdentity}=useLogin();
 </script>
 <template>
 <main class="settings-page"><div class="settings-content"><h2>添加 Telegram 账号</h2>
@@ -13,8 +13,10 @@ const {snapshot,connection,phone,passphrase,remember,recoveryId,value,busy,error
   <div class="buttons"><button class="primary" :disabled="busy">{{busy?'正在创建会话…':'开始登录'}}</button><button type="button" :disabled="busy" @click="cancel">取消</button></div>
 </form>
 <template v-else>
-  <p class="muted">{{connection?.detail}}</p><p v-if="connection?.connection_state!=='connectionStateReady'" class="muted">等待网络连接；请检查全局 SOCKS5 配置。</p>
-  <form v-if="label" @submit.prevent="submit"><label>{{label}}<input v-model="value" :type="connection?.auth_state==='authorizationStateWaitPhoneNumber'||connection?.auth_state==='authorizationStateWaitEmailAddress'?'text':'password'" autocomplete="off" required></label><button class="primary" :disabled="busy">提交</button></form>
+  <p class="muted">{{sendingPhone?'正在提交手机号并请求验证码…':connection?.detail}}</p><p v-if="connection?.connection_state!=='connectionStateReady'" class="muted">等待网络连接；请检查全局 SOCKS5 配置。</p>
+  <form v-if="combinedAuth" class="authorization-form" @submit.prevent="submit"><label>Telegram 验证码<input v-model="value" type="text" inputmode="numeric" autocomplete="off" :disabled="busy||connection?.auth_state==='authorizationStateWaitPassword'" :required="connection?.auth_state==='authorizationStateWaitCode'" :placeholder="connection?.auth_state==='authorizationStateWaitPassword'?'验证码已验证':''"></label><label>Telegram 两步验证密码（2FA）<input v-model="twoFactorPassword" type="password" autocomplete="off" :disabled="busy" :required="connection?.auth_state==='authorizationStateWaitPassword'" placeholder="已启用两步验证时填写"></label><small>已启用两步验证请同时填写密码；未启用可留空。验证码通过后会自动完成两步验证。</small><button class="primary" :disabled="busy">{{busy?'正在验证…':connection?.auth_state==='authorizationStateWaitPassword'?'提交两步验证密码':'验证并登录'}}</button></form>
+  <form v-else-if="label" @submit.prevent="submit"><label>{{label}}<input v-model="value" :type="connection?.auth_state==='authorizationStateWaitPhoneNumber'||connection?.auth_state==='authorizationStateWaitEmailAddress'?'text':'password'" autocomplete="off" required></label><button class="primary" :disabled="busy">提交</button></form>
+  <p v-else-if="sendingPhone" class="muted">验证码发送后会自动显示验证表单，无需再次输入手机号。</p>
   <p v-else-if="connection?.auth_state==='authorizationStateReady'">正在读取 Telegram 身份并登记账号…</p>
   <p v-else-if="connection?.auth_state==='authorizationStateWaitOtherDeviceConfirmation'">请在已登录的 Telegram 设备完成授权确认。</p>
   <p v-else class="muted">登录步骤由 Telegram 返回的授权状态决定。初始化失败时可取消后使用原密码重试。</p>

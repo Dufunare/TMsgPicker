@@ -13,6 +13,7 @@ AccountRegistry
 PendingLogin（login.rs 服务 + AppState 内存所有权）
   profile_id            提前分配最终唯一 ID，不移动运行中的数据库
   phone                 仅内存，实际 WaitPhoneNumber 时提交并清空
+  phone_submitting      自动手机号提交的 UI 等待标志，不保存手机号／不写盘
   remember_database     首次登录的选择，成功登记时处理 DPAPI 副本
   newly_created         取消时只有本次创建的目录可清理；恢复旧记录保留数据
 
@@ -46,6 +47,10 @@ reset.rs 提供可由 Mock 实现的两阶段协调器：先从注册表枚举�
 managed_data.rs 统一固定所有者清理：检查绝对路径、禁止 ParentDir、检查所有祖先及整棵目录树，不跟随符号链接／Windows Reparse Point，清理后验证确实不存在。Windows 使用 OPEN_REPARSE_POINT 句柄检查节点，锁定祖先和当前节点禁止重命名／替换，并通过已验证的句柄删除，防止检查后路径被 Junction 替换。普通 delete_session 仍拒绝 Legacy；注销 Legacy 使用专用 cleanup_logged_out_session，仅删除 tdlib/db、tdlib/files，保护 tdlib/accounts。完整 Debug Reset 固定比对 LOCALAPPDATA/com.funare.tmsgpicker，不接受前端路径；开始删除后若失败，继续拒绝新账号任务／配置写入，只允许重试重置或安全退出。测试只使用 Mock 和独立临时合成目录。
 
 Vue 职责分离为 AccountPanel、AccountSettings、ApplicationSettings、LoginWizard。SettingsPage 在唯一 settings 窗口中用两个子页面呈现 ApplicationSettings／AccountSettings，应用选项不变；使用 v-show 保留切换时未保存的输入。useSettingsNavigation 先监听 settings-navigate，再读取进程内 settings_target，较新的事件优先；账号可显式选择，主窗口查看选择不自动重定向设置。注销后回退到仍存在的账号或显示添加引导，不关闭设置窗口。
+
+useLogin 独立管理临时输入与授权状态，自动提交手机号期间显示等待，不闪现重复手机号输入。验证码／2FA 密码使用同一表单，login_auth_submit 在账号生命周期锁内校验 PendingLogin、generation 及实际授权状态，先提交 code，再等待实际 WaitPassword 才提交已填写密码。无 2FA 继续身份登记；验证码失败不提交密码，密码失败只重试密码。邮箱／设备确认保留真实授权流程。提交、取消、Ready、Client generation 变化或卸载时清空相应临时输入，不保存验证码／2FA。useApplicationSettings 继续只管理全局配置，useWorkspace / accountViews 保留账号视图和消息任务。
+
+登录授权事件按 Profile／generation 暂存，在读取 login_status 期间到达的较新事件优先于旧快照，避免界面从验证码回退到手机号等待。初始 PendingLogin 所有者尚未知时也暂存更新，获得 Profile ID 后匹配；旧 generation 不回写当前界面。手机号被拒绝后允许修正，不由迟到的自动提交标志重新隐藏表单。
 
 Windows 原生标题栏和设置／登录辅助窗口共用 src/theme.json。window_theme.rs 使用 COLORREF = R | G<<8 | B<<16，设置 DWM 35（caption）、34（无边框描画）、36（text），不支持时保持原生降级。未引入自绘标题栏。详见 [Microsoft DWM 枚举文档](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute)。
 
