@@ -20,6 +20,7 @@ async function render(file:string,prepare:(w:ReturnType<typeof useWorkspace>)=>v
   let source=compileScript(descriptor,{id:'acceptance',inlineTemplate:true}).content;
   source=source.replace(/from ['"]\.\.\/useWorkspace['"]/g,"from '../useWorkspace.ts'").replace(/from ['"]\.\.\/accountViews['"]/g,"from '../accountViews.ts'");
   source=source.replace(/import UiIcon from [^;]+;/,"const UiIcon={render(){return null;}};");
+  source=source.replace(/import AppearanceSettings from [^;]+;/,"const AppearanceSettings={render(){return null;}};");
   const temporary=new URL(`.acceptance-${process.pid}-${file}.mjs`,url);
   await writeFile(temporary,ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText);
   try {
