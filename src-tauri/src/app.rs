@@ -1,4 +1,4 @@
-use crate::settings::{Settings, Snapshot, Store};
+use crate::settings::{AppearancePreferences, Settings, Snapshot, Store};
 use crate::{
     core::{self, MessageKey, QuerySpec, ScanResult},
     gateway::{Result, SessionLifecycle, TelegramGateway},
@@ -539,6 +539,11 @@ fn open_auxiliary(app: &tauri::AppHandle, label: &str, url: &str, title: &str) -
                 .build()
                 .map_err(|_| "Cannot open window")?;
         window_theme::apply(&window);
+        if let Ok(appearance) = with_store(&app.state::<AppState>(), |store| {
+            Ok(store.settings().appearance)
+        }) {
+            window_theme::apply_appearance(&window, &appearance);
+        }
     }
     Ok(())
 }
@@ -575,6 +580,22 @@ fn route_window_close(label: &str, main_close: impl FnOnce()) {
     if label == "main" {
         main_close();
     }
+}
+#[tauri::command]
+fn save_appearance(
+    app: tauri::AppHandle,
+    appearance: AppearancePreferences,
+) -> Result<AppearancePreferences> {
+    let state = app.state::<AppState>();
+    if state.exiting.load(Ordering::SeqCst) {
+        return Err("Application is shutting down".into());
+    }
+    with_store(&state, |store| store.set_appearance(appearance.clone()))?;
+    for window in app.webview_windows().values() {
+        window_theme::apply_appearance(window, &appearance);
+    }
+    let _ = app.emit("appearance-changed", &appearance);
+    Ok(appearance)
 }
 #[tauri::command]
 fn app_settings(s: State<AppState>) -> Result<Snapshot> {
@@ -2057,6 +2078,11 @@ pub fn run() {
             let handle = app.handle().clone();
             if let Some(main) = app.get_webview_window("main") {
                 window_theme::apply(&main);
+                if let Ok(appearance) = with_store(&app.state::<AppState>(), |store| {
+                    Ok(store.settings().appearance)
+                }) {
+                    window_theme::apply_appearance(&main, &appearance);
+                }
             }
             // Register all profiles during setup; initialize in independent workers.
             if let Err(e) = start_accounts(&handle) {
@@ -2102,6 +2128,7 @@ pub fn run() {
             #[cfg(debug_assertions)]
             debug_reset,
             app_settings,
+            save_appearance,
             save_settings,
             reset_settings,
             clear_secret,
