@@ -30,7 +30,8 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 
 | 命令 | 顶层参数 | 返回/行为 |
 |---|---|---|
-| `open_settings` | `{profileId:string|null}` | null 打开／聚焦 `settings` 应用设置；正式 ID 打开／聚焦 `account-<id>`，URL 永久绑定该 ID。后端验证正式账号，不接受 URL 或路径 |
+| `open_settings` | `{profileId:string|null}` | 打开／聚焦唯一 settings 窗口。null 定位应用子页面，正式 ID 定位账号子页面并选择该账号。后端验证正式账号，保存进程内导航目标并向该窗口发送 settings-navigate；不接受 URL 或路径 |
+| `settings_target` | 无 | `{tab:"application"\|"account",profile_id:string|null}`；设置窗口先监听导航，再读取最新目标，补偿创建／监听间隙；不写入配置或注册表 |
 | `open_login` | 无 | 打开／聚焦唯一 `login` 窗口；不创建正式账号，也不跳转到设置 |
 | `begin_login` | `{config:{phone,passphrase,remember_database,recovery_profile_id:string|null}}` | Profile ID；验证全局 API，分配唯一 ID 和最终隔离目录，创建 PendingLogin / Client 并初始化。只有 Ready 和 getMe 去重成功才正式登记。phone 仅保留在内存到实际 WaitPhoneNumber；recovery ID 仅允许已有待恢复记录，必须复用原目录和原密码 |
 | `login_status` | 无 | `Connection|null`；当前 PendingLogin 快照，先监听再读取 |
@@ -92,6 +93,7 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 | `workspace-settings-changed` | `{source:"main"\|"settings"}`；前端发送不含秘密的刷新通知，另一窗口重新通过 app_settings 读取非敏感状态；不作为会话授权依据 |
 | `login-completed` | Profile ID，仅发送 main；刷新注册表、选择新账号、加载聊天 |
 | `login-error` | 脱敏错误；保持 PendingLogin，以便重试或安全取消 |
+| `settings-navigate` | 仅发给 settings，`{tab:"application"\|"account",profile_id:string|null}`；定位子页面及账号，不触发 Client 生命周期或修改主账号；新事件优先于尚未返回的初始目标读取 |
 | `accounts-changed` | 无敏感负载；前端重新读取 app_settings，刷新 getMe 更新后的 Profile |
 | `account-notice` | `{profile_id,detail}`；重复 Telegram 身份或元数据保存失败的提示 |
 | `app-error` | 安全关闭失败时的短错误；保持进程，允许重试 |
@@ -116,9 +118,11 @@ Pending 临时消息 ID 按账号隔离，收到 Sent／Failed 后解除。断�
 
 配置／注册表／DPAPI 密文修改在私有暂存对象上完成，三个文件全部持久化成功后才提交内存。多文件替换使用回滚日志；失败恢复旧文件，启动前也先恢复未完成事务。恢复失败明确报错，拒绝继续写入；不静默重置配置。应用退出先拒绝新任务，全部提交 close 后并发等待 Closed；正常退出不调用 logOut。详情见 [Runtime 架构](RUNTIME_ARCHITECTURE.md)。
 
-## 三类辅助窗口生命周期
+## 设置与登录辅助窗口生命周期
 
-主窗口为 main；应用设置为 settings（view=settings）；账号设置为 account-<Profile ID>（view=account&profile=<ID>），创建后不可切换绑定；登录为唯一 login（view=login）。窗口 URL 由 Rust 固定生成，创建由 mutex 串行，重复点击解除最小化并聚焦。辅助窗口默认 500 × 580、最小 420 × 440，共享 theme.json 背景及 Windows 原生 DWM 样式。Settings capability 为这些本地窗口提供 core event 访问，不开放任意原生 TDLib 或秘密读取。
+主窗口为 main；设置为唯一 settings（view=settings），内含应用／账号两个可切换子页面，账号页面可选择已登记账号；登录为唯一 login（view=login）。导航目标仅属于进程内状态，不持久化。窗口 URL 由 Rust 固定生成，创建由 mutex 串行，重复点击解除最小化并聚焦。辅助窗口默认 500 × 580、最小 420 × 440，共享 theme.json 背景及 Windows 原生 DWM 样式。Settings capability 仅覆盖 settings 和 login，提供 core event 访问，不开放任意原生 TDLib 或秘密读取。
+
+设置子页面切换保留未保存的应用输入，显式切换账号时清空原账号临时口令／授权输入；主窗口切换不自动重定向设置。注销后刷新账号列表和添加引导，保持设置窗口。
 
 main CloseRequested 执行安全退出；设置窗口关闭正常销毁，不改变账号、查询或发送状态。LoginWindow CloseRequested 先阻止默认关闭，完成 cancel_pending_login 再 destroy；Destroyed 异常路径也尝试清理，失败广播错误，不退出整个应用。getMe 登记与取消由同一账号生命周期锁串行，已晋升正式账号不会被取消误删。主窗口安全退出关闭全部正式和 Pending Client，保留原有并发关闭、共享 Receiver 和 Pending 发送保护。
 

@@ -22,11 +22,13 @@ pnpm.cmd tauri dev
 
 没有正式账号时只显示“尚未添加 Telegram 账号”和添加按钮，保留外侧应用设置齿轮；不自动创建占位 Profile。正式账号卡片显示 getMe 返回的姓名、username 与网络状态。更多菜单只提供“断开连接 / 恢复连接”（互斥）和“账号设置”。查看账号仅改变 ActiveProfileId，不写 UI 偏好，也不改变后台 Client 或查询。
 
-三个独立窗口默认均为 500 × 580，重复点击聚焦已有窗口：
+设置窗口与登录窗口默认均为 500 × 580，重复点击聚焦已有窗口：
 
 - **添加 Telegram 账号**：所有添加入口打开唯一 LoginWindow，创建 PendingLogin 与隔离 Session。输入手机号、数据库密码和首次登录的“记住此设备”，随后按 TDLib 状态显示验证码、必要的 2FA 或邮箱步骤。Ready 后 getMe 去重，身份和可选 DPAPI 口令在同一事务中正式登记，主界面选中新账号。取消使用 close，等待 Closed 后仅清理本次新建的临时目录。旧版本未完成登录／Legacy 在此窗口单独恢复，取消恢复保留原数据。
-- **应用设置**：外侧齿轮打开，只管理全局 API ID / Hash、SOCKS5 和全局敏感凭据清除。配置优先于 `TMSGPICKER_API_ID` / `TMSGPICKER_API_HASH` 环境变量，秘密输入留空保留保存值。保存时安全关闭全部 Client 后重建运行中的账号，主动断开账号继续保持断开。
-- **账号设置**：更多菜单打开，窗口固定绑定打开时的 Profile ID，显示只读 Telegram 身份、状态、断开／恢复、注销及添加新账号。缺少口令时输入原数据库密码继续恢复。不提供改名、独立解锁菜单、记住设备、API、代理或布局设置。注销完成后关闭绑定账号的设置窗口；主窗口切换不改变其操作对象。
+- **应用设置子页面**：外侧齿轮打开统一设置窗口并定位应用子页面，保留 API ID / Hash、SOCKS5、全局敏感凭据清除及 Debug 工具。配置优先于 `TMSGPICKER_API_ID` / `TMSGPICKER_API_HASH` 环境变量，秘密输入留空保留保存值。保存时安全关闭全部 Client 后重建运行中的账号，主动断开账号继续保持断开。
+- **账号设置子页面**：更多菜单复用同一个设置窗口，定位账号子页面并选择该账号。页面内可选择其他账号，显示只读 Telegram 身份、状态、断开／恢复、注销及添加新账号。缺少口令时输入原数据库密码继续恢复。不提供改名、独立解锁菜单、记住设备、API、代理或布局设置。注销后刷新账号列表，空列表显示添加引导；设置窗口保持打开。主窗口切换不自动改变设置操作对象。
+
+两个设置子页面通过顶部按钮切换，保留未保存的应用输入；显式选择其他账号时清空原账号的临时口令与授权输入。窗口关闭不改变客户端生命周期。
 
 数据位于 `%LOCALAPPDATA%\com.funare.tmsgpicker\`：`app-config.json` 只保存应用配置，`accounts.json` 保存正式账号、主账号和分离的待恢复记录，`credential-store.json` 只保存当前 Windows 用户范围的 DPAPI 密文。旧 `settings.json` 保留为迁移备份，旧栏宽／Compact 字段被忽略，账号与凭据不丢失。三个文件仍通过暂存、flush、Windows 原子替换及回滚日志协调提交，失败恢复旧内存与磁盘，损坏或未来版本明确报错。秘密只由 Rust 解密，读取 IPC 不回填 Vue；新数据库口令只在初始化、Ready、getMe、去重和登记成功后按首次登录选择保存。手机号、验证码、2FA 不持久化，不降级明文。
 
@@ -79,7 +81,7 @@ pnpm.cmd test # Node 22.18+ / 24，Vue 内存渲染器；不访问 Telegram
 
 现有 `src-tauri/src/bin/tdlib_smoke.rs` / `tdlib_auth.rs` 保持可用。`tdlib_auth` 是原有手动工具，代理设置及打印方式仍采用原来的 bring-up 代码；日常使用新的桌面授权服务，不将旧 CLI 的输出当作可分享诊断。
 
-此前三栏与多账号记录见 [第一轮验收](docs/UI_ACCOUNTS_ACCEPTANCE.md) 和 [第二轮 UI 验收](docs/UI_REFINEMENT_ACCEPTANCE.md)；当前账号生命周期、三个独立入口与测试结果见 [本轮交付记录](docs/ACCOUNT_LIFECYCLE_ACCEPTANCE.md)。本机运行：`pnpm.cmd tauri dev`，或构建 `pnpm.cmd tauri build --debug --no-bundle` 后启动 `src-tauri/target/debug/tmsgpicker.exe`（同目录需 staging 的 DLL）。
+此前三栏与多账号记录见 [第一轮验收](docs/UI_ACCOUNTS_ACCEPTANCE.md) 和 [第二轮 UI 验收](docs/UI_REFINEMENT_ACCEPTANCE.md)；当前账号生命周期、统一设置／登录交互与测试结果见 [本轮交付记录](docs/ACCOUNT_LIFECYCLE_ACCEPTANCE.md)。本机运行：`pnpm.cmd tauri dev`，或构建 `pnpm.cmd tauri build --debug --no-bundle` 后启动 `src-tauri/target/debug/tmsgpicker.exe`（同目录需 staging 的 DLL）。
 
 ## 开发接口与部署限制
 

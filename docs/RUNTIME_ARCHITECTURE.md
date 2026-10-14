@@ -45,9 +45,9 @@ reset.rs 提供可由 Mock 实现的两阶段协调器：先从注册表枚举�
 
 managed_data.rs 统一固定所有者清理：检查绝对路径、禁止 ParentDir、检查所有祖先及整棵目录树，不跟随符号链接／Windows Reparse Point，清理后验证确实不存在。Windows 使用 OPEN_REPARSE_POINT 句柄检查节点，锁定祖先和当前节点禁止重命名／替换，并通过已验证的句柄删除，防止检查后路径被 Junction 替换。普通 delete_session 仍拒绝 Legacy；注销 Legacy 使用专用 cleanup_logged_out_session，仅删除 tdlib/db、tdlib/files，保护 tdlib/accounts。完整 Debug Reset 固定比对 LOCALAPPDATA/com.funare.tmsgpicker，不接受前端路径；开始删除后若失败，继续拒绝新账号任务／配置写入，只允许重试重置或安全退出。测试只使用 Mock 和独立临时合成目录。
 
-Vue 职责分离为 AccountPanel、AccountSettings、ApplicationSettings、LoginWizard；useLogin 独立管理临时输入与授权状态，useApplicationSettings 只管理全局配置，useWorkspace / accountViews 保留账号视图和消息任务。账号设置以 account-<ID> 窗口固定绑定 Profile；主窗口切换不会重新定向，注销后关闭绑定窗或显示失效。
+Vue 职责分离为 AccountPanel、AccountSettings、ApplicationSettings、LoginWizard。SettingsPage 在唯一 settings 窗口中用两个子页面呈现 ApplicationSettings／AccountSettings，应用选项不变；使用 v-show 保留切换时未保存的输入。useSettingsNavigation 先监听 settings-navigate，再读取进程内 settings_target，较新的事件优先；账号可显式选择，主窗口查看选择不自动重定向设置。注销后回退到仍存在的账号或显示添加引导，不关闭设置窗口。
 
-Windows 原生标题栏和三个辅助窗口共用 src/theme.json。window_theme.rs 使用 COLORREF = R | G<<8 | B<<16，设置 DWM 35（caption）、34（无边框描画）、36（text），不支持时保持原生降级。未引入自绘标题栏。详见 [Microsoft DWM 枚举文档](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute)。
+Windows 原生标题栏和设置／登录辅助窗口共用 src/theme.json。window_theme.rs 使用 COLORREF = R | G<<8 | B<<16，设置 DWM 35（caption）、34（无边框描画）、36（text），不支持时保持原生降级。未引入自绘标题栏。详见 [Microsoft DWM 枚举文档](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute)。
 
 验证范围与仍需人工验收的行为见 [当前交付记录](ACCOUNT_LIFECYCLE_ACCEPTANCE.md)。
 

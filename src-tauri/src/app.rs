@@ -49,6 +49,7 @@ impl Default for Connection {
 struct AppState {
     lifecycle: RwLock<()>,
     settings_window: Mutex<()>,
+    settings_target: Mutex<SettingsTarget>,
     pending_login: Mutex<Option<PendingLogin>>,
     store: Mutex<Option<Store>>,
     manager: TdlibRuntimeManager,
@@ -62,6 +63,19 @@ struct PendingLogin {
     phone: Option<String>,
     remember_database: bool,
     newly_created: bool,
+}
+#[derive(Clone, Serialize)]
+struct SettingsTarget {
+    tab: &'static str,
+    profile_id: Option<String>,
+}
+impl Default for SettingsTarget {
+    fn default() -> Self {
+        Self {
+            tab: "application",
+            profile_id: None,
+        }
+    }
 }
 #[derive(Default)]
 struct TdlibRuntimeManager {
@@ -557,19 +571,31 @@ async fn open_settings(app: tauri::AppHandle, profile_id: Option<String>) -> Res
             return Err("本地重置清理未完成，请重试 Debug 重置".into());
         }
         let _window_lock = s.settings_window.lock().unwrap();
-        if let Some(id) = profile_id {
-            with_store(&s, |store| store.select(&id))?;
-            open_auxiliary(
-                &app,
-                &format!("account-{id}"),
-                &format!("index.html?view=account&profile={id}"),
-                "账号设置",
-            )
-        } else {
-            open_auxiliary(&app, "settings", "index.html?view=settings", "应用设置")
+        if let Some(id) = &profile_id {
+            with_store(&s, |store| store.select(id))?;
         }
+        let target = SettingsTarget {
+            tab: if profile_id.is_some() {
+                "account"
+            } else {
+                "application"
+            },
+            profile_id,
+        };
+        *s.settings_target.lock().unwrap() = target.clone();
+        open_auxiliary(&app, "settings", "index.html?view=settings", "设置")?;
+        if let Some(window) = app.get_webview_window("settings") {
+            window
+                .emit("settings-navigate", target)
+                .map_err(|_| "Cannot navigate settings")?;
+        }
+        Ok(())
     })
     .await
+}
+#[tauri::command]
+fn settings_target(s: State<AppState>) -> SettingsTarget {
+    s.settings_target.lock().unwrap().clone()
 }
 fn route_window_close(label: &str, main_close: impl FnOnce()) {
     if label == "main" {
@@ -1128,9 +1154,6 @@ async fn logout_account(app: tauri::AppHandle, profile_id: String, confirmed: bo
         }
         global.manager.accounts.lock().unwrap().remove(&profile_id);
         let _ = app.emit("accounts-changed", ());
-        if let Some(window) = app.get_webview_window(&format!("account-{profile_id}")) {
-            let _ = window.close();
-        }
         Ok(())
     })
     .await
@@ -2094,6 +2117,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_settings,
+            settings_target,
             open_login,
             begin_login,
             login_status,

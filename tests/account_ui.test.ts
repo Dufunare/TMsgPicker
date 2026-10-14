@@ -41,7 +41,7 @@ test('linked panel menu has disconnect or resume and account settings; network l
   assert.match(closed,/恢复连接/);assert.equal(closed.includes('断开连接'),false);
   assert.equal(accountStatus({...connection,connection_state:'connectionStateConnecting'}),'连接中');
 });
-test('settings responsibilities are rendered separately and expired account stays invalid',async()=>{
+test('settings subpages retain their options and empty account settings guide account creation',async()=>{
   const account=await render('AccountSettings.vue',w=>{w.snapshot.value=fixture;w.profileId.value='A';w.statuses.A=connection;});
   for(const text of ['Real A','101','注销账号','添加新账号'])assert.match(account,new RegExp(text));
   for(const text of ['API ID','API Hash','SOCKS5','记住此设备','重命名','紧凑','移除本地'])assert.equal(account.includes(text),false);
@@ -54,7 +54,7 @@ test('settings responsibilities are rendered separately and expired account stay
   const incomplete=await render('ApplicationSettings.vue',w=>{w.snapshot.value=fixture;w.resetReport.value={completed:false,error:'完整重置未完成',accounts:[{profile_id:'B',display_name:'Synthetic B',completed:false,error:'synthetic network timeout'}]};});
   assert.match(incomplete,/Synthetic B/);assert.match(incomplete,/synthetic network timeout/);assert.match(incomplete,/完整重置未完成/);
   const expired=await render('AccountSettings.vue',w=>{w.snapshot.value={...fixture,profiles:[]};w.profileId.value='A';});
-  assert.match(expired,/设置窗口已失效/);assert.equal(expired.includes('注销账号'),false);
+  assert.match(expired,/尚未添加 Telegram 账号/);assert.match(expired,/添加新账号/);assert.equal(expired.includes('注销账号'),false);
 });
 test('wizard submits actual TDLib authorization state and clears transient inputs',async()=>{
   assert.equal(authorizationInput('authorizationStateWaitCode'),'Telegram 验证码');

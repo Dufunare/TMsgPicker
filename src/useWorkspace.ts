@@ -164,7 +164,7 @@ onMounted(async () => {
     if(!settingsView)unlisteners.push(await listen<string>('login-completed',async e=>{try{await refreshSettings();if(snapshot.value?.profiles.some(p=>p.profile_id===e.payload)){profileId.value=e.payload;await selectAccount();scheduleChats();}}catch(e){accountError.value=String(e);}}));
     unlisteners.push(await listen<{profile_id:string;detail:string}>('account-notice',e=>{accountViews.get(e.payload.profile_id).notice=e.payload.detail;}));
     unlisteners.push(await listen<{profile_id:string;target:string;old_message_id:string;state:string;generation:number}>('forward-update',e=>accountViews.sent(e.payload)));
-    await refreshSettings();applySettings();const requested=settingsView?new URLSearchParams(window.location.search).get('profile'):null;profileId.value=settingsView?(requested??''):(snapshot.value?.primary_profile_id??snapshot.value?.profiles[0]?.profile_id??'');await selectAccount();if(ready.value&&!settingsView)void loadChats();
+    await refreshSettings();applySettings();const requested=settingsView?new URLSearchParams(window.location.search).get('profile'):null;profileId.value=settingsView?(requested??(profileId.value||snapshot.value?.primary_profile_id||snapshot.value?.profiles[0]?.profile_id||'')):(snapshot.value?.primary_profile_id??snapshot.value?.profiles[0]?.profile_id??'');await selectAccount();if(ready.value&&!settingsView)void loadChats();
   } catch(e) {accountError.value=String(e);}
 });
 onUnmounted(()=>{unlisteners.forEach(fn=>fn());clearTimeout(chatTimer);answerDialog(null);});

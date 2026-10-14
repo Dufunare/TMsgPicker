@@ -9,11 +9,11 @@
 - 主账号保存于注册表；合法主账号优先，缺失时一次兼容合法旧 last_profile_id，否则按最早登记顺序回退。查看账号不写盘，不改变主账号，不调用 Client 生命周期。启动仍创建所有正式账号 Runtime；无保存口令的账号等待原数据库密码。
 - 所有添加按钮调用同一 open_login 服务；唯一 LoginWindow 根据真实 TDLib 状态推进。Ready 后 getMe 去重，身份与首次登录选择的 DPAPI 口令原子提交；成功 main 切换账号并加载聊天，Client 继续运行。取消只 close，等待 Closed 后清理本次新建目录；取消旧记录恢复保留原数据。
 - 更多菜单仅断开／恢复（互斥）与账号设置。主动断开标志独立于网络状态；普通网络断线仍由 TDLib 重连。
-- ApplicationSettings 只含 API、SOCKS5、全局凭据清除和 Debug 工具。AccountSettings 固定绑定 Profile ID，只管理只读身份、状态、断开／恢复／注销／添加账号；原 Session 需要密码或确实失效时在此继续恢复／授权。设置关闭不关闭 Client。
+- ApplicationSettings 与 AccountSettings 合并到唯一 settings 窗口，作为两个可切换子页面。ApplicationSettings 保留 API、SOCKS5、全局凭据清除和 Debug 工具的现有选项；AccountSettings 可选择操作账号，只管理只读身份、状态、断开／恢复／注销／添加账号。主窗口选择不重定向设置；切换子页面保留未保存的应用输入，切换操作账号清空临时口令。注销后刷新列表／添加引导，设置关闭不关闭 Client。
 - 注销只作用于指定账号：二次确认、logOut 明确回执及真实 Closed、持久化 logout_completed、专属 Session 清理、删除登记／口令。拒绝、超时或清理失败保留登记；超时继续观察同一 Client 的迟到回执／LoggingOut 和真实 Closed，不重复发 logOut 或追加 close。完成标志仅在 Closed 后保存，旧 logout_pending 不作为完成证据；重启和全局重建不会重新打开已完成注销的 Session。
 - 移除改名、移除本地 Profile、独立解锁菜单、Compact 设置和布局持久化 IPC。拖动、方向键与 Home 保留；每次主窗口启动使用左 23% / 右 29%。旧字段忽略，账号／秘密不丢失。
 - Debug Reset 现定义为“注销全部 Telegram Session + 清除全部本地数据 + 恢复首次启动状态”。两次确认并输入 RESET TMSGPICKER，先审阅清理类别及 Pending 发送，禁止新任务、取消查询、等待转发提交；注册表全部关联账号（含主动断开者）都须 logOut／真实 Closed。必要时恢复原 Session／口令，不能用 close 代替；已授权 Pending Client 也注销，未授权者可 close。部分失败保留恢复所需数据、显示逐账号结果、记录已完成注销供重试。全部完成后才检查并清理固定应用目录，包含 Legacy、DPAPI 凭据及缓存；成功退出后重启，失败不得提示成功。Release 从编译中排除危险命令及实现。
-- theme.json 由 Vue 与 Rust 共用；主窗口、两个设置类型及 LoginWindow 使用同一背景，Windows 11 DWM 原生 caption / border / text 使用正确 COLORREF，保留旧系统原生降级。
+- theme.json 由 Vue 与 Rust 共用；主窗口、统一设置及 LoginWindow 使用同一背景，Windows 11 DWM 原生 caption / border / text 使用正确 COLORREF，保留旧系统原生降级。
 
 ## 修改范围
 
@@ -34,14 +34,15 @@
 
 | 命令 | 结果 |
 |---|---|
-| pnpm.cmd test | 15 项通过 |
+| pnpm.cmd test | 17 项（含设置导航与迟到目标测试） |
+| cargo test --manifest-path src-tauri/Cargo.toml --lib app::tests | 10 项账号生命周期测试通过 |
 | pnpm.cmd build | TypeScript 与 Vite 构建通过 |
 | cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --lib --tests | 23 项核心回归通过；重置及目录单元测试另见下一行 |
 | cargo test --manifest-path src-tauri/Cargo.toml --lib -- --skip native_ | 42 个单元测试通过，跳过 2 个 native 测试 |
 | cargo check --manifest-path src-tauri/Cargo.toml --all-targets | 通过 |
 | cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings | 通过 |
 | cargo check --manifest-path src-tauri/Cargo.toml --release --lib | 通过；验证 Debug Reset 的编译条件排除 |
-| 完整可执行文件构建 | 现有 Debug exe 被占用，本次未替换运行程序；使用库测试完成验证 |
+| pnpm.cmd tauri build --debug --no-bundle | 通过；输出 src-tauri/target/debug/tmsgpicker.exe，本次未启动连接真实账号 |
 
 关键回归覆盖：多账号（含 Legacy、主动断开账号）全部 logOut／Closed 后才全量清理；授权有效的 Pending Client 注销；网络失败保留恢复所需 Session／凭据、重试跳过已完成账号；缺口令和 Closed 超时阻止清理；迟到回执按 Client 隔离且不重复注销／追加 close；旧请求接受标志不作为完成证据；文件占用／删除失败明确返回未完成，释放后可重试；清理后的首次启动空状态；Junction／越界路径拒绝；两次确认及短语匹配、Release 入口排除、逐账号错误展示，以及原有 Pending → Unknown 和视图隔离保护。
 
