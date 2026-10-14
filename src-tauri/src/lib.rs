@@ -8,4 +8,6 @@ pub mod tdlib;
 #[cfg(feature = "desktop")]
 pub use app::run;
 mod managed_data;
+#[cfg(any(debug_assertions, test))]
+pub mod reset;
 pub mod settings;

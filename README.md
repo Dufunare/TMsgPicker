@@ -36,7 +36,7 @@ Legacy Session 继续使用 `tdlib/db` 和 `tdlib/files`，未识别身份前作
 
 普通断开和退出应用只使用 `close` 并等待 Closed，保留 Session、登记和保存口令。网络暂断由 TDLib 自行重连，不等于主动断开。**注销账号**需要明确确认，只对指定账号执行 `logOut`，确认 ok 和 Closed 后检查并清理其私有数据库／文件，再删除登记与口令；Legacy 仅清理自己的 `db`、`files`，保护其他账号。响应未确认、关闭超时或清理失败均保留登记并报错；已确认的退出／关闭进度在本进程内可重试，不重复 logOut。重复 getMe 身份不覆盖原账号，新登录安全关闭并提示取消。
 
-Debug 应用设置提供“重置 TMsgPicker（清除全部本地数据）”：列出数据类别并要求输入 `RESET TMsgPicker`，沿用 Pending 发送等待／Unknown 明确确认，阻止新任务，全部 close / Closed 后验证固定应用专属目录和所有祖先／后代无符号链接或 Reparse Point，再清除配置、凭据、全部 Session、Legacy 与缓存。成功退出后需重启，失败明确报错；不执行 Telegram logOut。Release 通过 Rust `cfg(debug_assertions)` 排除命令注册和删除实现。
+Debug 应用设置提供“重置 TMsgPicker（注销全部账号并清除全部本地数据）”：列出数据类别、两次确认并输入 `RESET TMSGPICKER`，沿用 Pending 发送等待／Unknown 明确确认。先阻止新任务、取消查询并等待转发提交，遍历注册表中全部关联账号，包含主动断开账号；必要时用原 Session 和数据库口令恢复 Client，逐一执行 logOut 并确认真实 Closed。有效授权的 Pending Client 也须注销，未授权 Client 可 close。任何失败都会保留失败账号的 Session／凭据和登记，显示逐账号结果并允许重试，已完成注销的账号不会重复执行。只有全部完成后才严格清理固定应用专属目录的配置、凭据、全部 Session、Legacy 与缓存；Windows 使用不跟随 Reparse Point 的锁定句柄防止越界。成功退出，重启显示无账号首次启动界面；删除失败明确报告。Release 通过 Rust `cfg(debug_assertions)` 排除危险命令注册和实现。普通退出、断开和账号切换仍不发起 logOut。自动化只使用 Mock TDLib 和独立临时合成数据。
 
 所有窗口共享 `src/theme.json` 背景 Token。Windows 11 原生标题栏使用 DWM caption、border、text 属性，COLORREF 正确按 BGR 字节转换；旧系统保留原生降级，拖动与系统窗口按钮继续由系统处理。
 

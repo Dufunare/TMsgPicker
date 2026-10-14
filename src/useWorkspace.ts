@@ -26,7 +26,7 @@ function askDialog(options:NonNullable<typeof dialog.value>){if(dialog.value)ret
 function answerDialog(value:{text:string;deleteData:boolean}|null){dialog.value=null;dialogResolve?.(value);dialogResolve=null;}
 
 const passphrase=ref(''),authValue=ref('');
-const {apiId,apiHash,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,applySettings,saveSettings,clearSecret,debugReset}=useApplicationSettings(snapshot,invokeCommand,accountAction,confirmPendingClose,askDialog,notice);
+const {apiId,apiHash,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,applySettings,saveSettings,clearSecret,debugReset,resetReport,resetBusy}=useApplicationSettings(snapshot,invokeCommand,accountAction,(id,logout)=>confirmPendingClose(id,undefined,logout),askDialog,notice);
 
 const chatList = field('chatList');
 const search = field('search');
@@ -61,13 +61,13 @@ async function action(fn: () => Promise<void>) { const v=view.value;v.error='';v
 function clearSession(id=profileId.value) { accountViews.reset(id);if(id===profileId.value){sessionToken++;authValue.value='';} }
 async function accountAction(fn:()=>Promise<void|boolean>){const id=profileId.value,v=view.value;v.accountError='';v.busy=true;try{const changed=await fn();if(changed!==false)await emitEvent('workspace-settings-changed',{source:settingsView?'settings':'main'});}catch(e){accountViews.get(id).accountError=String(e);}finally{v.busy=false;}}
 async function refreshSettings(){snapshot.value=await invokeCommand<SettingsSnapshot>('app_settings');if(!settingsView&&!snapshot.value.profiles.some(p=>p.profile_id===profileId.value))profileId.value=snapshot.value.primary_profile_id??'';const states=await invokeCommand<Connection[]>('account_statuses');states.forEach(accountViews.connection);const unknown=await invokeCommand<UnknownSend[]>('unknown_sends');unknown.forEach(accountViews.sent);}
-async function confirmPendingClose(profileId:string|null, initial?:CloseChallenge):Promise<string|null|undefined>{
+async function confirmPendingClose(profileId:string|null, initial?:CloseChallenge,logout=false):Promise<string|null|undefined>{
   const challenge=initial??await invokeCommand<CloseChallenge>('close_guard',{profileId});
   const scope=profileId===null?'全部账号':`账号「${snapshot.value?.profiles.find(p=>p.profile_id===profileId)?.display_name??profileId}」`;
   if(!challenge.pending_count)return null;
   if(challenge.retry_after_ms>0){await askDialog({title:'等待发送回执',text:`尚有 ${challenge.pending_count} 条 Pending 转发。请等待约 ${Math.ceil(challenge.retry_after_ms/1000)} 秒后重试；届时可以确认安全关闭并将未确认结果记为 Unknown。本次不会关闭客户端。`});return undefined;}
   if(!challenge.token)throw new Error('关闭确认已失效，请重试');
-  const answer=await askDialog({title:'确认关闭未完成的发送',text:`${challenge.pending_count} 条转发已超过等待时间。确认安全关闭${scope}并将未确认结果记为 Unknown（送达状态未知）？消息可能已经发送，请先在 Telegram 检查，避免重复转发。不会退出 Telegram 登录；这些未确认记录仅在本进程保留。`});
+  const answer=await askDialog({title:'确认关闭未完成的发送',text:`${challenge.pending_count} 条转发已超过等待时间。确认安全关闭${scope}并将未确认结果记为 Unknown（送达状态未知）？消息可能已经发送，请先在 Telegram 检查，避免重复转发。${logout?'随后将注销全部 Telegram 账号；':'不会退出 Telegram 登录；'}这些未确认记录仅在本进程保留。`});
   return answer?challenge.token:undefined;
 }
 async function connect() {
@@ -169,7 +169,7 @@ onMounted(async () => {
 });
 onUnmounted(()=>{unlisteners.forEach(fn=>fn());clearTimeout(chatTimer);answerDialog(null);});
 
-return { dialog,answerDialog,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,preset,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetLayout,resizeLayout };
+return { dialog,answerDialog,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,preset,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetReport,resetBusy,resetLayout,resizeLayout };
 }
 export type Workspace = ReturnType<typeof useWorkspace>;
 export const workspaceKey=Symbol("workspace");

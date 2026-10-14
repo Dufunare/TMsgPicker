@@ -100,6 +100,8 @@ enum SubmissionPhase {
 struct ClientSubmission {
     phase: SubmissionPhase,
     terminal_sent: bool,
+    logout_tag: Option<String>,
+    logout_acknowledged: bool,
 }
 impl ClientSubmission {
     fn submit(&mut self, terminal: bool, send: impl FnOnce()) -> Result<()> {
@@ -265,6 +267,28 @@ fn dispatch_client(map: &Mutex<HashMap<i32, Arc<ClientSlot>>>, v: Value) {
     }; // Unknown/retired client, including late replies.
     let closed = v["@type"] == "updateAuthorizationState"
         && v["authorization_state"]["@type"] == "authorizationStateClosed";
+    {
+        let mut submission = slot.submission.lock().unwrap_or_else(|e| e.into_inner());
+        if submission.logout_tag.is_some() {
+            if v["@extra"].as_str() == submission.logout_tag.as_deref() {
+                if v["@type"] == "ok" {
+                    submission.logout_acknowledged = true;
+                } else if v["@type"] == "error" {
+                    // Also handle late rejections after the request waiter timed out.
+                    submission.logout_tag = None;
+                    submission.logout_acknowledged = false;
+                    submission.terminal_sent = false;
+                    if submission.phase == SubmissionPhase::Closing {
+                        submission.phase = SubmissionPhase::Accepting;
+                    }
+                }
+            } else if v["@type"] == "updateAuthorizationState"
+                && v["authorization_state"]["@type"] == "authorizationStateLoggingOut"
+            {
+                submission.logout_acknowledged = true;
+            }
+        }
+    }
     let response = slot.router.dispatch(v.clone());
     if closed {
         slot.router.fail_all();
@@ -331,11 +355,16 @@ impl TdlibGateway {
         let (tx, rx) = mpsc::channel();
         let mut submission = self.submission.lock().unwrap_or_else(|e| e.into_inner());
         self.router.insert(tag.clone(), tx)?;
-        if let Err(error) = submission.submit(body["@type"] == "logOut", || unsafe {
+        let logout = body["@type"] == "logOut";
+        if let Err(error) = submission.submit(logout, || unsafe {
             ffi::td_send(self.client, request.as_ptr());
         }) {
             self.router.remove(&tag);
             return Err(error);
+        }
+        if logout {
+            submission.logout_tag = Some(tag.clone());
+            submission.logout_acknowledged = false;
         }
         Ok(PendingRequest {
             tag,
@@ -451,28 +480,31 @@ impl SessionLifecycle for TdlibGateway {
     fn wait_closed(&self) -> Result<()> {
         TdlibGateway::wait_closed(self)
     }
+    fn logout_in_progress(&self) -> bool {
+        self.submission
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .logout_tag
+            .is_some()
+    }
+    fn logout_acknowledged(&self) -> bool {
+        self.submission
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .logout_acknowledged
+    }
+    fn wait_logout_closed(&self) -> Result<()> {
+        // Resume the shared receiver to observe the same clients; submit no close.
+        recover_receiver_for_close();
+        self.wait_closed()
+    }
 }
 impl TelegramGateway for TdlibGateway {
     fn request(&self, body: Value, cancel: &AtomicBool) -> Result<Value> {
         if cancel.load(Ordering::Relaxed) {
             return Err("Cancelled".into());
         }
-        let logout = body["@type"] == "logOut";
-        let result = self.enqueue(body)?.wait(cancel);
-        // Only a definitive TDLib rejection allows returning to Accepting.
-        // Timeout/receiver failure may mean logout is in flight; never append close.
-        if logout
-            && result
-                .as_ref()
-                .is_err_and(|e| e.starts_with("TDLib error "))
-        {
-            let mut submission = self.submission.lock().unwrap_or_else(|e| e.into_inner());
-            if submission.phase == SubmissionPhase::Closing {
-                submission.phase = SubmissionPhase::Accepting;
-                submission.terminal_sent = false;
-            }
-        }
-        result
+        self.enqueue(body)?.wait(cancel)
     }
     fn request_batch(&self, requests: Vec<Value>, cancel: &AtomicBool) -> Result<Vec<Value>> {
         let mut pending = Vec::new();
@@ -499,6 +531,65 @@ impl TelegramGateway for TdlibGateway {
 mod tests {
     use super::*;
     static NATIVE_TEST_LOCK: Mutex<()> = Mutex::new(());
+    #[test]
+    fn late_logout_receipts_are_tracked_per_client_without_a_request_waiter() {
+        let map = Mutex::new(HashMap::new());
+        for id in [1, 2] {
+            map.lock().unwrap().insert(
+                id,
+                Arc::new(ClientSlot {
+                    router: Arc::new(Router::default()),
+                    closed: Arc::new((Mutex::new(false), Condvar::new())),
+                    on_update: Box::new(|_| {}),
+                    submission: Arc::new(Mutex::new(ClientSubmission {
+                        phase: SubmissionPhase::Closing,
+                        terminal_sent: true,
+                        logout_tag: Some("1".into()),
+                        logout_acknowledged: false,
+                    })),
+                }),
+            );
+        }
+        let a = map.lock().unwrap()[&1].clone();
+        let b = map.lock().unwrap()[&2].clone();
+        dispatch_client(&map, json!({"@client_id":1,"@extra":"1","@type":"ok"}));
+        assert!(a.submission.lock().unwrap().logout_acknowledged);
+        assert!(!b.submission.lock().unwrap().logout_acknowledged);
+        assert!(!*a.closed.0.lock().unwrap()); // Receipt alone is not completion.
+        a.submission
+            .lock()
+            .unwrap()
+            .close(|| panic!("must never append close"));
+        dispatch_client(
+            &map,
+            json!({"@client_id":2,"@extra":"1","@type":"error","code":500}),
+        );
+        assert!(b.submission.lock().unwrap().logout_tag.is_none());
+        assert!(b.submission.lock().unwrap().phase == SubmissionPhase::Accepting);
+        {
+            let mut state = b.submission.lock().unwrap();
+            state.phase = SubmissionPhase::ReceiverFailed;
+            state.terminal_sent = true;
+            state.logout_tag = Some("2".into());
+        }
+        dispatch_client(
+            &map,
+            json!({"@client_id":2,"@extra":"2","@type":"error","code":500}),
+        );
+        let mut closed_after_rejection = false;
+        b.submission
+            .lock()
+            .unwrap()
+            .close(|| closed_after_rejection = true);
+        assert!(closed_after_rejection);
+        dispatch_client(
+            &map,
+            json!({"@client_id":1,"@type":"updateAuthorizationState","authorization_state":{"@type":"authorizationStateClosed"}}),
+        );
+        assert!(*a.closed.0.lock().unwrap());
+        assert!(!*b.closed.0.lock().unwrap());
+        assert_eq!(map.lock().unwrap().len(), 1);
+    }
     #[test]
     fn concurrent_submit_and_close_have_a_single_submission_boundary() {
         let gate = Arc::new(Mutex::new(ClientSubmission::default()));

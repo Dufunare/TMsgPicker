@@ -1,7 +1,7 @@
 use crate::settings::{Settings, Snapshot, Store};
 use crate::{
     core::{self, MessageKey, QuerySpec, ScanResult},
-    gateway::{Result, TelegramGateway},
+    gateway::{Result, SessionLifecycle, TelegramGateway},
     services::{ActionService, AuthService, Chat, ChatService, ConnectConfig, ForwardReport},
     tdlib::gateway::TdlibGateway,
 };
@@ -79,6 +79,8 @@ struct AccountRuntime {
     closing: AtomicBool,
     user_disconnected: AtomicBool,
     logout_progress: Mutex<crate::services::LogoutProgress>,
+    #[cfg(debug_assertions)]
+    reset_pending_closed: AtomicBool,
     connection: Mutex<Connection>,
     active: Mutex<Option<(String, Arc<AtomicBool>)>>,
     results: Mutex<Option<ScanResult>>,
@@ -495,6 +497,11 @@ fn account_statuses(s: State<AppState>) -> Vec<Connection> {
 }
 #[tauri::command]
 fn select_profile(s: State<AppState>, profile_id: String) -> Result<()> {
+    let _gate = s
+        .lifecycle
+        .try_read()
+        .map_err(|_| "Application transition in progress")?;
+    ensure_running(&s)?;
     with_store(&s, |store| store.select(&profile_id))
 }
 fn set_runtime_state(app: &tauri::AppHandle, s: &AccountRuntime, state: &str, detail: &str) {
@@ -784,7 +791,7 @@ struct ActivateConfig {
 }
 fn create_runtime(app: &tauri::AppHandle, id: &str) -> Result<Arc<AccountRuntime>> {
     let global = app.state::<AppState>();
-    let logout_pending = with_store(&global, |store| Ok(store.profile(id)?.logout_pending))?;
+    let logout_completed = with_store(&global, |store| Ok(store.profile(id)?.logout_completed))?;
     let mut map = global.manager.accounts.lock().unwrap();
     if let Some(r) = map.get(id) {
         return Ok(r.clone());
@@ -802,7 +809,7 @@ fn create_runtime(app: &tauri::AppHandle, id: &str) -> Result<Arc<AccountRuntime
     // Publish before native callbacks; callback blocks on map only until registration ends.
     map.insert(id.into(), r.clone());
     drop(map);
-    if logout_pending {
+    if logout_completed {
         *r.logout_progress.lock().unwrap() = crate::services::LogoutProgress {
             confirmed: true,
             closed: true,
@@ -841,6 +848,14 @@ fn create_client(app: &tauri::AppHandle, s: &AccountRuntime) -> Result<()> {
 fn initialize_account(app: &tauri::AppHandle, config: ActivateConfig) -> Result<()> {
     let global = app.state::<AppState>();
     let s = account(&global, &config.profile_id)?;
+    initialize_runtime(app, &s, config)
+}
+fn initialize_runtime(
+    app: &tauri::AppHandle,
+    s: &Arc<AccountRuntime>,
+    config: ActivateConfig,
+) -> Result<()> {
+    let global = app.state::<AppState>();
     let _lock = s
         .lifecycle
         .try_lock()
@@ -898,12 +913,12 @@ fn initialize_account(app: &tauri::AppHandle, config: ActivateConfig) -> Result<
         .as_ref()
         .is_none_or(|g| g.is_closed());
     if recreate {
-        create_client(app, &s)?;
+        create_client(app, s)?;
     }
     s.user_disconnected.store(false, Ordering::SeqCst);
     s.connection.lock().unwrap().user_disconnected = false;
     s.connecting.store(true, Ordering::SeqCst);
-    set_runtime_state(app, &s, "Initializing", "正在初始化此账号");
+    set_runtime_state(app, s, "Initializing", "正在初始化此账号");
     let g = s
         .gateway
         .lock()
@@ -933,7 +948,7 @@ fn initialize_account(app: &tauri::AppHandle, config: ActivateConfig) -> Result<
     }
     s.connecting.store(false, Ordering::SeqCst);
     if let Err(e) = &outcome {
-        set_runtime_state(app, &s, "Error", e);
+        set_runtime_state(app, s, "Error", e);
     } else {
         let mut connection = s.connection.lock().unwrap();
         connection.runtime_state = if connection.auth_state == "authorizationStateReady" {
@@ -1066,8 +1081,10 @@ async fn logout_account(app: tauri::AppHandle, profile_id: String, confirmed: bo
         if !confirmed {
             return Err("Confirm logout of the active account".into());
         }
+        let g = s.gateway.lock().unwrap().clone();
         let mut progress = s.logout_progress.lock().unwrap();
         if !progress.confirmed
+            && !g.as_ref().is_some_and(|g| g.logout_in_progress())
             && s.connection.lock().unwrap().auth_state != "authorizationStateReady"
         {
             return Err("请先恢复此账号连接，再注销账号".into());
@@ -1076,11 +1093,10 @@ async fn logout_account(app: tauri::AppHandle, profile_id: String, confirmed: bo
         s.closing.store(true, Ordering::SeqCst);
         clear_session(&s);
         set_runtime_state(&app, &s, "Closing", "正在注销 Telegram 授权");
-        let g = s.gateway.lock().unwrap().clone();
         let outcome = progress.execute(
             g.as_ref()
                 .map(|g| g.as_ref() as &dyn crate::gateway::SessionLifecycle),
-            || with_store(&global, |store| store.mark_logout_pending(&profile_id)),
+            || with_store(&global, |store| store.mark_logout_completed(&profile_id)),
             || {
                 finish_close(&s, Ok(()))?;
                 with_store(&global, |store| {
@@ -1703,12 +1719,24 @@ fn close_all(app: &tauri::AppHandle, confirmation: Option<String>) -> Result<()>
         }
     }
     let outcomes = std::thread::scope(|scope| {
+        let global = &global;
         let handles: Vec<_> = runtimes
             .iter()
             .map(|s| {
                 scope.spawn(move || {
                     let g = s.gateway.lock().unwrap().clone();
-                    let outcome = g.map_or(Ok(()), |g| g.wait_closed());
+                    let outcome = g.map_or(Ok(()), |g| {
+                        let mut progress = s.logout_progress.lock().unwrap();
+                        if g.logout_in_progress() || progress.confirmed {
+                            progress.observe_completion(Some(g.as_ref()), || {
+                                with_store(global, |store| {
+                                    store.mark_logout_completed(&s.profile_id)
+                                })
+                            })
+                        } else {
+                            g.wait_closed()
+                        }
+                    });
                     match finish_close(s, outcome) {
                         Ok(c) => {
                             let _ = app.emit("connection", c);
@@ -1768,24 +1796,226 @@ fn begin_safe_exit(app: &tauri::AppHandle, close_confirmation: Option<String>) {
     });
 }
 #[cfg(debug_assertions)]
+struct DebugResetBackend<'a> {
+    app: &'a tauri::AppHandle,
+    root: std::path::PathBuf,
+}
+#[cfg(debug_assertions)]
+fn reset_authorization(
+    app: &tauri::AppHandle,
+    s: &Arc<AccountRuntime>,
+    linked: bool,
+) -> Result<bool> {
+    use crate::gateway::SessionLifecycle;
+    let g = s.gateway.lock().unwrap().clone();
+    if s.logout_progress.lock().unwrap().confirmed
+        || g.as_ref().is_some_and(|g| g.logout_in_progress())
+    {
+        return Ok(true); // Continue observing the original logout, never restore/race it.
+    }
+    if let Some(g) = &g {
+        let state = s.connection.lock().unwrap().auth_state.clone();
+        if !g.is_closed() && state == "authorizationStateReady" {
+            return Ok(true);
+        }
+        if !g.is_closed()
+            && matches!(
+                state.as_str(),
+                "authorizationStateClosing" | "authorizationStateLoggingOut"
+            )
+        {
+            return Err("客户端生命周期尚未完成；请安全关闭后重试，不能把 close 当作注销".into());
+        }
+        if !g.is_closed() && state != "authorizationStateWaitTdlibParameters" {
+            if !linked
+                && matches!(
+                    state.as_str(),
+                    "authorizationStateWaitPhoneNumber"
+                        | "authorizationStateWaitCode"
+                        | "authorizationStateWaitPassword"
+                        | "authorizationStateWaitEmailAddress"
+                        | "authorizationStateWaitEmailCode"
+                        | "authorizationStateWaitRegistration"
+                        | "authorizationStateWaitOtherDeviceConfirmation"
+                )
+            {
+                return Ok(false);
+            }
+            return Err("请先恢复账号授权和连接，再重试完整重置".into());
+        }
+    }
+    let global = app.state::<AppState>();
+    let config = with_store(&global, |store| {
+        let root = store.session_root(&s.profile_id)?;
+        crate::managed_data::validate_owned(&store.root, &root)?;
+        if !root.join("db").is_dir() {
+            if linked {
+                return Err("原有 Session 数据库缺失；无法确认 Telegram 注销，请恢复后重试".into());
+            }
+            return Ok(None);
+        }
+        let passphrase = s.unlocked_passphrase.lock().unwrap().clone();
+        let credentials = store.account_credentials(&s.profile_id, passphrase.clone())?;
+        if credentials.passphrase.is_none() {
+            return Err("缺少原有数据库口令；请在账号设置或登录恢复中解锁此 Session 后重试".into());
+        }
+        Ok(Some(ActivateConfig {
+            profile_id: s.profile_id.clone(),
+            passphrase,
+            remember_database: credentials.remember_database,
+        }))
+    })?;
+    let Some(config) = config else {
+        return Ok(false);
+    };
+    s.closing.store(false, Ordering::SeqCst);
+    initialize_runtime(app, s, config)?;
+    let g = s
+        .gateway
+        .lock()
+        .unwrap()
+        .clone()
+        .ok_or("Client unavailable")?;
+    let deadline = Instant::now() + Duration::from_secs(45);
+    loop {
+        let auth = g.request(
+            json!({"@type":"getAuthorizationState"}),
+            &AtomicBool::new(false),
+        )?;
+        match auth["@type"].as_str() {
+            Some("authorizationStateReady") => return Ok(true),
+            Some("authorizationStateWaitTdlibParameters") if Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            Some(
+                "authorizationStateWaitPhoneNumber"
+                | "authorizationStateWaitCode"
+                | "authorizationStateWaitPassword"
+                | "authorizationStateWaitEmailAddress"
+                | "authorizationStateWaitEmailCode"
+                | "authorizationStateWaitRegistration"
+                | "authorizationStateWaitOtherDeviceConfirmation",
+            ) if !linked => return Ok(false),
+            _ => {
+                return Err(
+                    "原有 Session 未恢复到可注销状态；请恢复授权、数据库口令或网络后重试".into(),
+                );
+            }
+        }
+    }
+}
+#[cfg(debug_assertions)]
+impl crate::reset::ResetBackend for DebugResetBackend<'_> {
+    fn inventory(&self) -> Result<Vec<crate::reset::Participant>> {
+        let global = self.app.state::<AppState>();
+        with_store(&global, |store| {
+            store
+                .runtime_profile_ids()
+                .iter()
+                .map(|id| {
+                    let p = store.profile(id)?;
+                    Ok(crate::reset::Participant {
+                        profile_id: id.clone(),
+                        display_name: p.display_name.clone(),
+                        linked: !store.is_pending(id),
+                    })
+                })
+                .collect()
+        })
+    }
+    fn end_participant(&self, p: &crate::reset::Participant) -> Result<()> {
+        let global = self.app.state::<AppState>();
+        // Inventory comes from AccountRegistry, including actively disconnected accounts.
+        let s = create_runtime(self.app, &p.profile_id)?;
+        let completed = {
+            let progress = s.logout_progress.lock().unwrap();
+            progress.closed && progress.recorded
+        };
+        if completed || (!p.linked && s.reset_pending_closed.load(Ordering::SeqCst)) {
+            return Ok(());
+        }
+        let authorized = reset_authorization(self.app, &s, p.linked)?;
+        let _lock = s.lifecycle.lock().unwrap();
+        can_transition(&s)?;
+        clear_session(&s);
+        if authorized {
+            s.closing.store(true, Ordering::SeqCst);
+            set_runtime_state(
+                self.app,
+                &s,
+                "Closing",
+                "完整重置：正在注销 Telegram 授权，等待注销完成",
+            );
+            let g = s.gateway.lock().unwrap().clone();
+            let outcome = s.logout_progress.lock().unwrap().execute(
+                g.as_ref()
+                    .map(|g| g.as_ref() as &dyn crate::gateway::SessionLifecycle),
+                || with_store(&global, |store| store.mark_logout_completed(&p.profile_id)),
+                || {
+                    finish_close(&s, Ok(()))?;
+                    Ok(())
+                },
+            );
+            match outcome {
+                Ok(()) => {
+                    *s.unlocked_passphrase.lock().unwrap() = None;
+                    set_runtime_state(
+                        self.app,
+                        &s,
+                        "LogoutCleanupRequired",
+                        "已完成注销；等待全部账号注销成功后统一清理",
+                    );
+                    Ok(())
+                }
+                Err(error) => {
+                    set_runtime_state(self.app, &s, "Error", &format!("完整重置未完成：{error}"));
+                    Err(error)
+                }
+            }
+        } else {
+            close_session(self.app, &s, false)?;
+            s.reset_pending_closed.store(true, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+    fn delete_local_data(&self) -> Result<()> {
+        let global = self.app.state::<AppState>();
+        // No failed or still-open client may reach the deletion phase.
+        if accounts(&global).iter().any(|r| {
+            r.gateway
+                .lock()
+                .unwrap()
+                .as_ref()
+                .is_some_and(|g| !g.is_closed())
+        }) {
+            return Err("仍有未关闭的 TDLib 数据库；完整重置未完成".into());
+        }
+        global.reset_cleanup_pending.store(true, Ordering::SeqCst);
+        crate::managed_data::delete_owned(&self.root, &self.root)
+    }
+}
+#[cfg(debug_assertions)]
 #[tauri::command]
 async fn debug_reset(
     app: tauri::AppHandle,
     phrase: String,
     close_confirmation: Option<String>,
-) -> Result<()> {
+) -> Result<crate::reset::ResetReport> {
     background(move || {
-        if phrase != "RESET TMsgPicker" {
-            return Err("请输入确认短语 RESET TMsgPicker".into());
+        if phrase != "RESET TMSGPICKER" {
+            return Err("请输入确认短语 RESET TMSGPICKER".into());
         }
         let global = app.state::<AppState>();
-        let _gate = global
-            .lifecycle
-            .try_write()
-            .map_err(|_| "Application transition in progress")?;
         if global.exiting.swap(true, Ordering::SeqCst) {
             return Err("Application is shutting down".into());
         }
+        // Refuse new work before waiting for ongoing submissions. Receivers remain active.
+        for r in accounts(&global) {
+            if let Some((_, cancel)) = r.active.lock().unwrap().as_ref() {
+                cancel.store(true, Ordering::SeqCst);
+            }
+        }
+        let _gate = global.lifecycle.write().unwrap();
         let outcome = (|| {
             let root = with_store(&global, |store| Ok(store.root.clone()))?;
             let expected = std::env::var_os("LOCALAPPDATA")
@@ -1796,18 +2026,20 @@ async fn debug_reset(
                 return Err("Debug reset ownership check failed".into());
             }
             crate::managed_data::validate_owned(&expected, &root)?;
-            close_all(&app, close_confirmation)?;
-            global.reset_cleanup_pending.store(true, Ordering::SeqCst);
-            crate::managed_data::delete_owned(&expected, &root)?;
-            *global.store.lock().unwrap() = None;
-            global.pending_login.lock().unwrap().take();
-            global.manager.accounts.lock().unwrap().clear();
-            Ok(())
+            approve_and_emit(&app, &accounts(&global), close_confirmation)?;
+            crate::reset::execute(&DebugResetBackend { app: &app, root })
         })();
         match outcome {
-            Ok(()) => {
+            Ok(report) if report.completed => {
+                global.pending_login.lock().unwrap().take();
+                global.manager.accounts.lock().unwrap().clear();
                 app.exit(0);
-                Ok(())
+                Ok(report)
+            }
+            Ok(report) => {
+                global.exiting.store(false, Ordering::SeqCst);
+                let _ = app.emit("accounts-changed", ());
+                Ok(report)
             }
             Err(error) => {
                 global.exiting.store(false, Ordering::SeqCst);

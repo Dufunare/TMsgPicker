@@ -43,24 +43,45 @@ impl LogoutProgress {
         cleanup: impl FnOnce() -> Result<()>,
     ) -> Result<()> {
         if !self.confirmed {
-            let reply = g
-                .ok_or("Restore account before logout")?
-                .request(json!({"@type":"logOut"}), &AtomicBool::new(false))?;
-            if reply["@type"] != "ok" {
-                return Err("Telegram logout was not confirmed; registration retained".into());
+            let client = g.ok_or("Restore account before logout")?;
+            if !client.logout_in_progress() {
+                match client.request(json!({"@type":"logOut"}), &AtomicBool::new(false)) {
+                    Ok(reply) if reply["@type"] == "ok" => self.confirmed = true,
+                    Ok(_) => {
+                        return Err(
+                            "Telegram logout was not confirmed; registration retained".into()
+                        );
+                    }
+                    Err(error) if !client.logout_in_progress() => return Err(error),
+                    Err(_) => {} // Submitted but outcome unknown: observe this same client.
+                }
+            }
+        }
+        self.observe_completion(g, record_confirmation)?;
+        cleanup()
+    }
+    /// Observe an already submitted logout, including during ordinary safe exit.
+    /// This method never submits logOut or close.
+    pub fn observe_completion(
+        &mut self,
+        g: Option<&dyn SessionLifecycle>,
+        record_confirmation: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        if !self.closed {
+            g.ok_or("Client unavailable before confirmed Closed")?
+                .wait_logout_closed()?;
+            if !self.confirmed && !g.is_some_and(|g| g.logout_acknowledged()) {
+                return Err("Client closed without verified logout; registration retained".into());
             }
             self.confirmed = true;
+            self.closed = true;
         }
+        // Persist completion only after the actual Closed update, never merely ok.
         if !self.recorded {
             record_confirmation()?;
             self.recorded = true;
         }
-        if !self.closed {
-            g.ok_or("Client unavailable before confirmed Closed")?
-                .wait_closed()?;
-            self.closed = true;
-        }
-        cleanup()
+        Ok(())
     }
 }
 impl AuthService {

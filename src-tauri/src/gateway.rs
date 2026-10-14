@@ -14,6 +14,17 @@ pub trait TelegramGateway: Send + Sync {
 pub trait SessionLifecycle: TelegramGateway {
     fn begin_close(&self);
     fn wait_closed(&self) -> Result<()>;
+    /// A timed out request can still be executing. Never resubmit or append close.
+    fn logout_in_progress(&self) -> bool {
+        false
+    }
+    /// Positive receipt or LoggingOut observed on this exact client.
+    fn logout_acknowledged(&self) -> bool {
+        false
+    }
+    fn wait_logout_closed(&self) -> Result<()> {
+        self.wait_closed()
+    }
 }
 
 pub fn id(value: &str) -> Result<i64> {

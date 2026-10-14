@@ -16,5 +16,6 @@ export interface ForwardReport { items: ActionItem[] }
 export interface UnknownSend { profile_id: string; generation: number; target: string; old_message_id: string; state: string }
 export interface CloseChallenge { pending_count: number; retry_after_ms: number; token: string | null }
 export interface Settings { schema_version: number; api_id: number | null; proxy_enabled: boolean; proxy_server: string; proxy_port: number; proxy_username: string }
-export interface Profile { profile_id: string; telegram_user_id: string | null; display_name: string; username: string | null; is_legacy_profile: boolean; session_directory_id: string; created_at: number; last_used_at: number; has_saved_database_secret: boolean; logout_pending: boolean }
+export interface Profile { profile_id: string; telegram_user_id: string | null; display_name: string; username: string | null; is_legacy_profile: boolean; session_directory_id: string; created_at: number; last_used_at: number; has_saved_database_secret: boolean; logout_pending: boolean; logout_completed?: boolean }
+export interface DebugResetReport { completed:boolean; accounts:Array<{profile_id:string;display_name:string;completed:boolean;error:string|null}>;error:string|null }
 export interface SettingsSnapshot { settings: Settings; profiles: Profile[]; has_saved_api_hash: boolean; has_saved_proxy_password: boolean; primary_profile_id: string | null; interrupted_profiles: Profile[]; debug_tools: boolean }

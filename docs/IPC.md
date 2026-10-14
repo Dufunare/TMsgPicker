@@ -41,14 +41,16 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 | `reset_settings` | `{closeConfirmation?:string|null}` | 兼容普通配置重置，未在 UI 提供；保留注册表、主账号、凭据和 Session，安全重建 |
 | `clear_secret` | `{key:"api"\|"proxy"\|"db:<profile_id>",closeConfirmation?:string|null}` | Snapshot；全局秘密清除会安全重建全部 Client，proxy 同一持久化事务清空密码与用户名；清除 db 只取消对应保存副本，当前解锁会话不关闭 |
 | `logout_account` | `{profileId,confirmed:true}` | 仅指定账号：确认 logOut 的 ok 和 Closed 后清理其私有 Session，再原子删除登记及口令。失败保留登记；本进程保存确认／关闭进度以便重试，不重复 logOut。主账号自动回退，最后一个账号删除后为空 |
-| `debug_reset` | `{phrase:"RESET TMsgPicker",closeConfirmation?:string|null}` | **仅 Debug 注册**。阻止新任务，沿用 Pending 发送保护，全部 close / Closed 后检查并清理固定 `%LOCALAPPDATA%/com.funare.tmsgpicker` 全部数据。成功退出，失败报错；不接受删除路径、不 logOut。Release 排除命令注册和实现 |
+| `debug_reset` | `{phrase:"RESET TMSGPICKER",closeConfirmation?:string|null}` | **仅 Debug 注册及编译**。UI 两次确认、逐项说明清理类别；先拒绝新任务、取消查询并等待正在提交的转发，沿用 Pending → Unknown 审阅保护。遍历注册表，包含主动断开账号，必要时用原 Session／口令恢复；全部关联账号 logOut 并确认 Closed，授权有效的 Pending Client 也 logOut，未授权 Pending Client 可 close。仅全部成功后严格清理固定 `%LOCALAPPDATA%/com.funare.tmsgpicker` 全部数据（含 Legacy），完成后退出，重启进入首次启动状态。不接受删除路径。返回 ResetReport；部分失败保留失败账号的登记／Session／凭据并允许重试，已完成注销不重复执行 |
 
 移除 IPC：`add_account`、`rename_account`、`remove_account`、`save_layout`、`save_ui_preferences`、`close_settings`。辅助窗口通过原生关闭按钮关闭；登录窗口先执行安全取消。
 
 `Settings = {schema_version:1,api_id,proxy_enabled,proxy_server,proxy_port,proxy_username}`。旧 `last_profile_id` 只用于升级读取；栏宽和 Compact 忽略且不再写出。
 
 `SettingsSnapshot = {settings,profiles,primary_profile_id,interrupted_profiles,debug_tools,has_saved_api_hash,has_saved_proxy_password}`。
-正式 profiles 的 Telegram User ID 必须非空；Profile 字段为 `profile_id,telegram_user_id,display_name,username,session_directory_id,is_legacy_profile,created_at,last_used_at,has_saved_database_secret,logout_pending`，名称和 username 始终根据最新 getMe 更新。已确认 logOut 会先持久化 logout_pending；重启后只进入注销清理恢复状态，不重建其 Client。待登录／升级未识别记录仅出现在 interrupted_profiles，供 LoginWindow 恢复，不进入普通账号列表。accounts.json 分离保存正式 profiles、primary_profile_id 和 pending_profiles。Session ID 由后端生成，业务命令不接受 Client ID 或文件路径。
+正式 profiles 的 Telegram User ID 必须非空；Profile 字段包括 `profile_id,telegram_user_id,display_name,username,session_directory_id,is_legacy_profile,created_at,last_used_at,has_saved_database_secret,logout_pending,logout_completed`，名称和 username 始终根据最新 getMe 更新。仅在有注销证据且收到真实 Closed 后持久化 logout_completed；重启后只进入注销清理恢复状态，不重建其 Client。旧 logout_pending 仅证明请求曾被接受，不作为完成证据。待登录／升级未识别记录仅出现在 interrupted_profiles，供 LoginWindow 恢复，不进入普通账号列表。accounts.json 分离保存正式 profiles、primary_profile_id 和 pending_profiles。Session ID 由后端生成，业务命令不接受 Client ID 或文件路径。
+
+`ResetReport = {completed,accounts:[{profile_id,display_name,completed,error:string|null}],error:string|null}`。任一账号或最终目录清理失败时 completed=false，设置窗口显示逐账号结果、错误及重试说明。TDLib 成功注销的账号已经不可恢复，即使其他账号失败；请求 ok 不是完成。网络超时保留同一 Client 并继续观察迟到的回执／LoggingOut 和 Closed，不用 close 冒充注销。普通关闭、断开和切换不发起 logOut。
 
 秘密和配置优先级：全局设置／DPAPI 秘密优先，缺少 API 时使用环境变量。原数据库口令手工输入优先于保存值；缺失时 Runtime 保持 NeedsDatabasePassphrase，账号设置输入原密码继续恢复原 Session，不使用空密钥或删除数据库。新口令仅在初始化、Ready、getMe、去重和登记的同一事务中按首次登录选择保存／清除；无正在运行的登录向导时，升级恢复保留原凭据。保存状态 IPC 不解密、不返回秘密。手机号、验证码、2FA 不保存。
 

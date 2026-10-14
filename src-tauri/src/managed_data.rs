@@ -46,8 +46,10 @@ pub fn validate_owned(root: &Path, target: &Path) -> Result<()> {
             Err(_) => return Err("Cannot inspect managed data parent".into()),
         }
     }
-    if fs::symlink_metadata(target).is_ok() {
-        inspect_tree(target)?;
+    match fs::symlink_metadata(target) {
+        Ok(_) => inspect_tree(target)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => return Err("Cannot inspect managed data".into()),
     }
     Ok(())
 }
@@ -55,22 +57,97 @@ pub fn delete_owned(root: &Path, target: &Path) -> Result<()> {
     validate_owned(root, target)?;
     match fs::symlink_metadata(target) {
         Ok(metadata) => {
+            #[cfg(windows)]
+            let outcome = delete_windows(target);
+            #[cfg(not(windows))]
             let outcome = if metadata.is_dir() {
                 fs::remove_dir_all(target)
             } else {
                 fs::remove_file(target)
             };
-            outcome.map_err(|_| {
-                "Local data cleanup failed; registration retained for retry".to_string()
-            })?;
+            let _ = metadata;
+            outcome
+                .map_err(|error| format!("本地数据清理失败，完整重置未完成，请重试：{error}"))?;
         }
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
         Err(_) => return Err("Cannot inspect managed data".into()),
     }
-    if target.exists() {
-        return Err("Local data remains after cleanup".into());
+    match fs::symlink_metadata(target) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        _ => return Err("Local data remains after cleanup or absence cannot be verified".into()),
     }
     Ok(())
+}
+
+// Pin each ancestor and the node with handles that forbid rename/replacement.
+// Delete through the verified handle, never a fresh path-based recursive delete.
+#[cfg(windows)]
+fn delete_windows(target: &Path) -> std::io::Result<()> {
+    use std::{
+        fs::OpenOptions,
+        os::windows::{
+            fs::{MetadataExt, OpenOptionsExt},
+            io::AsRawHandle,
+        },
+    };
+    fn open_node(path: &Path, delete: bool) -> std::io::Result<fs::File> {
+        let file = OpenOptions::new()
+            .access_mode(0x80 | if delete { 0x10000 } else { 0 }) // READ_ATTRIBUTES | DELETE
+            .share_mode(1) // FILE_SHARE_READ; forbid reparse mutation, rename and replacement
+            .custom_flags(0x02000000 | 0x00200000) // BACKUP_SEMANTICS | OPEN_REPARSE_POINT
+            .open(path)
+            .map_err(|e| std::io::Error::new(e.kind(), format!("Open managed node: {e}")))?;
+        if file.metadata()?.file_attributes() & 0x400 != 0 {
+            return Err(std::io::Error::other("Reparse point; cleanup refused"));
+        }
+        Ok(file)
+    }
+    #[repr(C)]
+    struct Disposition {
+        delete_file: u8,
+    }
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn SetFileInformationByHandle(
+            handle: *mut std::ffi::c_void,
+            class: i32,
+            info: *const Disposition,
+            size: u32,
+        ) -> i32;
+    }
+    fn remove_node(path: &Path) -> std::io::Result<()> {
+        let file = open_node(path, true)?;
+        if file.metadata()?.is_dir() {
+            for entry in fs::read_dir(path)? {
+                remove_node(&entry?.path())?;
+            }
+        }
+        let disposition = Disposition { delete_file: 1 };
+        if unsafe {
+            SetFileInformationByHandle(
+                file.as_raw_handle(),
+                4,
+                &disposition,
+                std::mem::size_of::<Disposition>() as u32,
+            )
+        } == 0
+        {
+            let e = std::io::Error::last_os_error();
+            return Err(std::io::Error::new(
+                e.kind(),
+                format!("Delete verified node: {e}"),
+            ));
+        }
+        drop(file);
+        Ok(())
+    }
+    let ancestors: Vec<_> = target.ancestors().skip(1).collect();
+    let _pins: Vec<_> = ancestors
+        .into_iter()
+        .rev()
+        .map(|p| open_node(p, false))
+        .collect::<std::io::Result<_>>()?;
+    remove_node(target)
 }
 
 #[cfg(test)]
@@ -123,6 +200,31 @@ mod tests {
         assert_eq!(fs::read(owner.join("unrelated")).unwrap(), b"preserve");
         fs::remove_file(owner.join("unrelated")).unwrap();
         fs::remove_dir(owner).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn locked_synthetic_file_reports_failure_and_can_be_retried() {
+        use std::os::windows::fs::OpenOptionsExt;
+        let root = std::env::temp_dir().join(format!(
+            "tmsg-locked-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("synthetic");
+        fs::write(&file, b"fixture").unwrap();
+        let locked = fs::OpenOptions::new()
+            .read(true)
+            .share_mode(1)
+            .open(&file)
+            .unwrap();
+        assert!(delete_owned(&root, &root).is_err());
+        assert!(file.exists());
+        drop(locked);
+        delete_owned(&root, &root).unwrap();
+        assert!(!root.exists());
     }
     #[cfg(windows)]
     #[test]

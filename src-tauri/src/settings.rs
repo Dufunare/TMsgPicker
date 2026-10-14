@@ -48,6 +48,9 @@ pub struct AccountProfile {
     pub created_at: u64,
     #[serde(default)]
     pub logout_pending: bool,
+    // Older logout_pending only proved request acceptance, not completed logout.
+    #[serde(default)]
+    pub logout_completed: bool,
 }
 pub type Settings = ApplicationConfig;
 pub type Profile = AccountProfile;
@@ -268,6 +271,7 @@ impl Store {
                 session_directory_id: "legacy".into(),
                 created_at: now(),
                 logout_pending: false,
+                logout_completed: false,
             });
             s.registry.legacy_imported = true;
         }
@@ -544,6 +548,7 @@ impl Store {
                 session_directory_id: id.clone(),
                 created_at: now(),
                 logout_pending: false,
+                logout_completed: false,
             });
             Ok(id)
         })
@@ -676,15 +681,17 @@ impl Store {
             Ok(())
         })
     }
-    pub fn mark_logout_pending(&mut self, id: &str) -> Result<()> {
+    pub fn mark_logout_completed(&mut self, id: &str) -> Result<()> {
         self.transaction(|draft| {
             let profile = draft
                 .registry
                 .profiles
                 .iter_mut()
+                .chain(draft.registry.pending_profiles.iter_mut())
                 .find(|p| p.profile_id == id)
                 .ok_or("Unknown linked account")?;
             profile.logout_pending = true;
+            profile.logout_completed = true;
             Ok(())
         })
     }
@@ -858,6 +865,26 @@ fn replace(from: &Path, to: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn old_logout_acceptance_flag_is_not_completed_and_pending_completion_is_durable() {
+        let root = temp_root();
+        let mut store = Store::open(root.clone()).unwrap();
+        let id = store.add("synthetic".into()).unwrap();
+        store.identify(&id, &serde_json::json!({"id":1})).unwrap();
+        store.registry.profiles[0].logout_pending = true;
+        store.save().unwrap();
+        let mut restarted = Store::open(root.clone()).unwrap();
+        assert!(restarted.profile(&id).unwrap().logout_pending);
+        assert!(!restarted.profile(&id).unwrap().logout_completed);
+        restarted.mark_logout_completed(&id).unwrap();
+        let pending = restarted.add("authorized pending fixture".into()).unwrap();
+        restarted.mark_logout_completed(&pending).unwrap();
+        let restarted = Store::open(root.clone()).unwrap();
+        assert!(restarted.profile(&id).unwrap().logout_completed);
+        assert!(restarted.profile(&pending).unwrap().logout_completed);
+        assert!(restarted.is_pending(&pending));
+        fs::remove_dir_all(root).unwrap();
+    }
     fn storage_bytes(root: &Path) -> Vec<Vec<u8>> {
         STORAGE_FILES
             .iter()

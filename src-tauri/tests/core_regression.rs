@@ -122,7 +122,7 @@ fn logout_requires_positive_receipt_and_closed_before_cleanup_and_retries_withou
         progress
             .execute(
                 Some(&g),
-                || store.mark_logout_pending(&a),
+                || store.mark_logout_completed(&a),
                 || panic!("close timeout must retain account and data")
             )
             .is_err()
@@ -130,11 +130,11 @@ fn logout_requires_positive_receipt_and_closed_before_cleanup_and_retries_withou
     assert!(progress.confirmed);
     assert!(!progress.closed);
     assert!(
-        Store::open(root.clone())
+        !Store::open(root.clone())
             .unwrap()
             .profile(&a)
             .unwrap()
-            .logout_pending
+            .logout_completed
     );
     assert!(
         progress
@@ -169,6 +169,75 @@ fn logout_requires_positive_receipt_and_closed_before_cleanup_and_retries_withou
         vec!["logOut", "logOut", "logOut", "waitClosed", "waitClosed"]
     );
     std::fs::remove_dir_all(root).unwrap();
+}
+#[test]
+fn timed_out_logout_is_observed_without_resubmission_or_close_and_unverified_closed_is_rejected() {
+    use tmsgpicker_lib::services::LogoutProgress;
+    struct DelayedLogout {
+        submitted: AtomicBool,
+        acknowledgement: AtomicBool,
+        fail_wait: AtomicBool,
+        requests: Mutex<usize>,
+    }
+    impl TelegramGateway for DelayedLogout {
+        fn request(&self, request: Value, _: &AtomicBool) -> Result<Value> {
+            assert_eq!(request["@type"], "logOut");
+            *self.requests.lock().unwrap() += 1;
+            self.submitted.store(true, Ordering::SeqCst);
+            Err("synthetic request timeout".into())
+        }
+        fn request_batch(&self, _: Vec<Value>, _: &AtomicBool) -> Result<Vec<Value>> {
+            unreachable!()
+        }
+    }
+    impl SessionLifecycle for DelayedLogout {
+        fn begin_close(&self) {
+            panic!("close must not replace logOut");
+        }
+        fn wait_closed(&self) -> Result<()> {
+            if self.fail_wait.swap(false, Ordering::SeqCst) {
+                Err("synthetic Closed timeout".into())
+            } else {
+                Ok(())
+            }
+        }
+        fn logout_in_progress(&self) -> bool {
+            self.submitted.load(Ordering::SeqCst)
+        }
+        fn logout_acknowledged(&self) -> bool {
+            self.acknowledgement.load(Ordering::SeqCst)
+        }
+    }
+    let g = DelayedLogout {
+        submitted: AtomicBool::new(false),
+        acknowledgement: AtomicBool::new(false),
+        fail_wait: AtomicBool::new(true),
+        requests: Mutex::new(0),
+    };
+    let mut progress = LogoutProgress::default();
+    assert!(
+        progress
+            .execute(
+                Some(&g),
+                || panic!("cannot persist a timeout as completed"),
+                || panic!("cannot clean up on timeout")
+            )
+            .is_err()
+    );
+    assert!(
+        progress
+            .execute(
+                Some(&g),
+                || panic!("cannot persist unverified Closed"),
+                || panic!("cannot clean up without logout evidence")
+            )
+            .is_err()
+    );
+    assert!(!progress.closed && !progress.recorded);
+    g.acknowledgement.store(true, Ordering::SeqCst); // Late ok / LoggingOut from same client.
+    progress.execute(Some(&g), || Ok(()), || Ok(())).unwrap();
+    assert!(progress.closed && progress.recorded);
+    assert_eq!(*g.requests.lock().unwrap(), 1);
 }
 impl MockTelegramGateway {
     fn pages(pages: Vec<Value>) -> Self {

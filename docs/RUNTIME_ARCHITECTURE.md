@@ -37,11 +37,13 @@ ApplicationConfig 仅保存 API、SOCKS5 的应用级配置。旧 left_ratio、r
 | 断开 | 原有 Pending 审阅保护 → 取消指定账号查询 → close / Closed → 标记主动断开；保留登记、Session、DPAPI 口令 |
 | 恢复 | 只恢复主动断开账号；复用其原 Session，缺口令时提示原密码。启动缺密码的账号直接继续数据库初始化，不增加“解锁”菜单 |
 | 注销 | UI 二次确认 + confirmed 校验 → 指定 Ready 账号 logOut → 明确 ok → Closed → 清理该账号私有数据 → 原子删除登记和口令 → 主账号回退；错误保留登记，已确认的退出进度可重试 |
-| Debug 全部重置 | Debug 编译限定 + 明确短语 → 禁止新任务 → Pending 等待／Unknown 审阅 → 全部 close / Closed → 固定应用专属目录的祖先／后代检查 → 删除全部本地状态 → 成功退出；不 logOut |
+| Debug 全部重置 | Debug 编译限定 + 两次确认／RESET TMSGPICKER → 禁止新任务、取消查询、等待正在提交的转发 → Pending 等待／Unknown 审阅 → 注册表全部关联账号 logOut（主动断开账号必要时恢复原 Session／口令）／Closed → 已授权 Pending Client 注销，未授权者 close／Closed → 全部成功才严格清理固定应用专属目录 → 成功退出；失败保留必要数据和逐账号进度供重试 |
 
-注销使用 services::LogoutProgress，可用 Mock 验证正面响应、关闭超时、清理失败和重试顺序。明确 ok 后先持久化 Profile.logout_pending，再等待 Closed 和清理；重启发现此标志只进入 LogoutCleanupRequired，不重新打开原 Session，允许重试完成本地清理。全局重建也跳过已确认注销的账号。TDLib 明确拒绝 logOut 时提交门可恢复 Accepting；超时或接收故障仍保留终止状态，不盲目追加 close。注销清理失败提供重试，确认未得到时不能宣称注销成功。
+注销使用 services::LogoutProgress。明确 ok 只记录进程内请求接受状态；收到真实 Closed 后才持久化 Profile.logout_completed，重启发现完成标志进入 LogoutCleanupRequired，不重新打开原 Session。旧 logout_pending 不足以证明完成，不自动进入已完成状态。共享接收器按 Client／tag 缓存迟到的注销回执及 LoggingOut 证据，即使请求等待已经超时，重试也观察同一 Client，不重复发 logOut 或追加 close。明确拒绝时提交门恢复 Accepting；接收故障可恢复同一共享接收线程观察真实关闭。安全退出也会记录之前已经发起的注销完成进度，不新发注销请求。全局重建跳过已确认注销账号；清理或持久化失败明确报告。
 
-managed_data.rs 统一固定所有者清理：检查绝对路径、禁止 ParentDir、检查所有祖先及整棵目录树，不跟随符号链接／Windows Reparse Point，清理后检查残留。普通 delete_session 仍拒绝 Legacy；注销 Legacy 使用专用 cleanup_logged_out_session，仅删除 tdlib/db、tdlib/files，保护 tdlib/accounts。完整 Debug Reset 固定比对 LOCALAPPDATA/com.funare.tmsgpicker，不接受前端路径；开始删除后若失败，继续拒绝新账号任务／配置写入，只允许重试重置或安全退出。测试只在独立临时目录内创建合成数据库、Junction、凭据和缓存。
+reset.rs 提供可由 Mock 实现的两阶段协调器：先从注册表枚举全部正式和待恢复记录，逐一完成注销／未授权客户端关闭并汇总结果；任一失败均不能执行最终清理。主动断开不是跳过条件，缺原口令、原数据库、有效授权或网络必须恢复后重试。完成的注销持久化保留登记，失败的 Session／凭据不由应用删除。全部确认完成后才清理 ApplicationConfig、AccountRegistry、全部 DPAPI 凭据及应用专属目录；成功退出避免运行期旧状态残留。
+
+managed_data.rs 统一固定所有者清理：检查绝对路径、禁止 ParentDir、检查所有祖先及整棵目录树，不跟随符号链接／Windows Reparse Point，清理后验证确实不存在。Windows 使用 OPEN_REPARSE_POINT 句柄检查节点，锁定祖先和当前节点禁止重命名／替换，并通过已验证的句柄删除，防止检查后路径被 Junction 替换。普通 delete_session 仍拒绝 Legacy；注销 Legacy 使用专用 cleanup_logged_out_session，仅删除 tdlib/db、tdlib/files，保护 tdlib/accounts。完整 Debug Reset 固定比对 LOCALAPPDATA/com.funare.tmsgpicker，不接受前端路径；开始删除后若失败，继续拒绝新账号任务／配置写入，只允许重试重置或安全退出。测试只使用 Mock 和独立临时合成目录。
 
 Vue 职责分离为 AccountPanel、AccountSettings、ApplicationSettings、LoginWizard；useLogin 独立管理临时输入与授权状态，useApplicationSettings 只管理全局配置，useWorkspace / accountViews 保留账号视图和消息任务。账号设置以 account-<ID> 窗口固定绑定 Profile；主窗口切换不会重新定向，注销后关闭绑定窗或显示失效。
 
