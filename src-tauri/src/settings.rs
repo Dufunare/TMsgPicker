@@ -1484,3 +1484,51 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 }
+
+#[cfg(test)]
+mod appearance_preferences_tests {
+    use super::*;
+    #[test]
+    fn defaults_and_advanced_appearance_values_validate() {
+        let mut style = AppearancePreferences::default();
+        assert!(style.validate().is_ok());
+        for theme in ["light", "dark", "system"] {
+            style.theme = theme.into();
+            assert!(style.validate().is_ok());
+        }
+        style.theme = "unknown".into();
+        assert!(style.validate().is_err());
+        style.theme = "light".into();
+        style.accent = "#badHEX".into();
+        assert!(style.validate().is_err());
+        style.accent = "#aAbbC0".into();
+        style.radius = 25;
+        assert!(style.validate().is_err());
+        style.radius = 12;
+        style.font_scale = 81;
+        assert!(style.validate().is_err());
+        style.font_scale = 115;
+        style.scrollbar = "hidden".into();
+        assert!(style.validate().is_err());
+    }
+    #[test]
+    fn legacy_configuration_defaults_appearance_without_losing_connection_fields() {
+        let source = serde_json::json!({
+            "schema_version":1, "api_id":12345,
+            "proxy_enabled":true,"proxy_server":"127.0.0.1",
+            "proxy_port":7897,"proxy_username":"user"
+        });
+        let config: ApplicationConfig = serde_json::from_value(source).unwrap();
+        assert_eq!(config.appearance, AppearancePreferences::default());
+        assert_eq!(config.api_id, Some(12345));
+        assert_eq!(config.proxy_port, 7897);
+    }
+    #[test]
+    fn saved_application_configuration_exposes_no_secret_fields() {
+        let json = serde_json::to_value(ApplicationConfig::default()).unwrap();
+        assert!(json.get("appearance").is_some());
+        assert!(json.get("api_hash").is_none());
+        assert!(json.get("database_passphrase").is_none());
+        assert!(json.get("proxy_password").is_none());
+    }
+}
