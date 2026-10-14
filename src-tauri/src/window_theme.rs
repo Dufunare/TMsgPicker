@@ -91,7 +91,7 @@ fn system_dark() -> bool {
     let name = encode("AppsUseLightTheme");
     let mut key = 0_isize;
     unsafe {
-        if RegOpenKeyExW(0x80000001_u32 as isize, path.as_ptr(), 0, 0x20019, &mut key) != 0 {
+        if RegOpenKeyExW((0x80000001_u32 as i32) as isize, path.as_ptr(), 0, 0x20019, &mut key) != 0 {
             return false;
         }
         let mut value = 1_u32;
