@@ -48,3 +48,13 @@ export function createAccountViews() {
   }
   return { views, statuses, get, reset, connection, progress, sent };
 }
+
+export function accountStatus(connection?: Connection) {
+  if(!connection)return '启动中';
+  if(connection.user_disconnected)return '已主动断开';
+  if(connection.runtime_state==='NeedsDatabasePassphrase')return '需要数据库密码';
+  if(connection.runtime_state==='Error'||connection.runtime_state==='LogoutCleanupRequired')return '操作未完成';
+  if(connection.runtime_state==='Closed')return '已关闭';
+  if(connection.runtime_state==='AuthorizationRequired')return '需要授权';
+  return connection.runtime_state==='Ready'&&connection.connection_state==='connectionStateReady'?'已连接':'连接中';
+}

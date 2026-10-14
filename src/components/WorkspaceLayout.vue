@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref } from 'vue';
 const props=defineProps<{left:number;right:number}>();
-const emit=defineEmits<{resize:[left:number,right:number];reset:[];commit:[]}>();
+const emit=defineEmits<{resize:[left:number,right:number];reset:[]}>();
 const host=ref<HTMLElement>(); const width=ref(1400); const queryOpen=ref(false); const dragging=ref(false), pressed=ref(false), activeSplitter=ref<'left'|'right'|null>(null);
 let observer:ResizeObserver; let side:'left'|'right'='left';
 const narrow=computed(()=>width.value<1060);
@@ -19,8 +19,8 @@ function adjust(which:'left'|'right',delta:number){
 let last=0;
 function down(e:PointerEvent,which:'left'|'right'){if(narrow.value||e.button!==0)return;side=which;last=e.clientX;pressed.value=true;(e.currentTarget as HTMLElement).setPointerCapture(e.pointerId);e.preventDefault();}
 function move(e:PointerEvent){if(!pressed.value||e.clientX===last)return;dragging.value=true;activeSplitter.value=side;adjust(side,(e.clientX-last)*(side==='left'?1:-1));last=e.clientX;}
-function end(){pressed.value=false;activeSplitter.value=null;if(dragging.value){dragging.value=false;emit('commit');}}
-function key(e:KeyboardEvent,which:'left'|'right'){if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();adjust(which,(e.key==='ArrowRight'?20:-20)*(which==='left'?1:-1));emit('commit');}else if(e.key==='Home'){emit('reset');}}
+function end(){pressed.value=false;activeSplitter.value=null;if(dragging.value){dragging.value=false;}}
+function key(e:KeyboardEvent,which:'left'|'right'){if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();adjust(which,(e.key==='ArrowRight'?20:-20)*(which==='left'?1:-1));}else if(e.key==='Home'){emit('reset');}}
 onMounted(()=>{observer=new ResizeObserver(entries=>{width.value=entries[0]!.contentRect.width;});observer.observe(host.value!);});onUnmounted(()=>observer?.disconnect());
 </script>
 <template>

@@ -18,21 +18,31 @@ pnpm.cmd tauri dev
 
 `build.rs` 检查全部文件，将 DLL 暂存到 Cargo profile 目录和测试程序所在 `deps/`。缺失文件会提供路径和配置提示。`pnpm.cmd` 可避免 PowerShell 执行策略阻止 `pnpm.ps1`。
 
-主窗口为左侧 Account & Chats、中间 Messages & Results、右侧 Query Builder。两条分界线保留 6px 透明命中区，默认只有极淡细线，Hover/Focus/Drag 显示半透明 1px 提示；可拖动，也可聚焦后按左右方向键调整、Home 重置；Settings「安全与界面」中提供重置布局。小于 1060 CSS px 时查询栏变成可打开的侧边抽屉。
+主窗口为左侧 Account & Chats、中间 Messages & Results、右侧 Query Builder。两条分界线保留 6px 透明命中区，可拖动或聚焦后按方向键调整、Home 重置。栏宽仅在当前窗口内生效，每次启动恢复固定默认比例（左 23%、右 29%），不写入配置。小于 1060 CSS px 时查询栏变成可打开的侧边抽屉。用户卡片固定使用紧凑布局，不再提供 Compact 设置。
 
-左上用户卡片显示姓名、username 与状态，右侧图标提供添加、切换和更多操作；卡片底部小箭头可收缩到 Compact 模式并记住偏好。卡片外侧齿轮打开独立的 500 × 580 Settings 小窗；重复点击聚焦已有窗口，关闭小窗不会断开 TDLib。API/代理、数据库口令和手机号/验证码/2FA 授权均在小窗中处理，不占用聊天列表。保存配置优先于 `TMSGPICKER_API_ID` / `TMSGPICKER_API_HASH` 环境变量，未配置时使用环境变量；密码输入框留空保留已保存值，明确的清除按钮删除保存值。保存 API/代理配置会安全关闭并重建全部账号；各账号的失败原因独立显示。已解锁账号可用本进程内口令恢复，未解锁账号仍需口令。配置重置只重置普通设置，保留账号、秘密与 Session；同样重建全部账号。
+没有正式账号时只显示“尚未添加 Telegram 账号”和添加按钮，保留外侧应用设置齿轮；不自动创建占位 Profile。正式账号卡片显示 getMe 返回的姓名、username 与网络状态。更多菜单只提供“断开连接 / 恢复连接”（互斥）和“账号设置”。查看账号仅改变 ActiveProfileId，不写 UI 偏好，也不改变后台 Client 或查询。
 
-数据位于 `%LOCALAPPDATA%\com.funare.tmsgpicker\`：`app-config.json` 保存唯一应用配置，`accounts.json` 保存账号注册表，`credential-store.json` 只保存当前 Windows 用户范围的 DPAPI 密文。旧 `settings.json` 非破坏迁移后保留为原始备份，后续不再读取它。修改先暂存，三个文件经 flush、Windows 原子替换及回滚日志协调提交，成功后才更新内存；写入失败恢复旧状态，启动前恢复未完成事务；损坏或未来版本明确报错。回滚日志仅保存原文件字节，秘密仍为 DPAPI 密文。API Hash、代理密码和可选数据库口令仅由 Rust 解密，读取 IPC 只返回保存标志，不回填 Vue。数据库口令按 Profile ID 隔离，仅初始化成功后保存；验证码和 2FA 不持久化。保护失败需清除对应保存凭据并重新输入，不降级为明文。
+三个独立窗口默认均为 500 × 580，重复点击聚焦已有窗口：
 
-首次升级检测 `tdlib/db` 后幂等导入 Legacy Profile，继续使用原来的 `tdlib/db` 和 `tdlib/files`，不迁移、覆盖或删除。数据库密码必须使用原有 passphrase；仍按原规则 Base64 编码为 TDLib bytes（Base64 不等于加密）。新账号使用 `tdlib/accounts/<内部 Profile ID>/db` 与 `files`。默认手工输入口令；只有用户勾选「记住此设备」才保存 DPAPI 密文，取消勾选立即清除保存口令而保留数据库。
+- **添加 Telegram 账号**：所有添加入口打开唯一 LoginWindow，创建 PendingLogin 与隔离 Session。输入手机号、数据库密码和首次登录的“记住此设备”，随后按 TDLib 状态显示验证码、必要的 2FA 或邮箱步骤。Ready 后 getMe 去重，身份和可选 DPAPI 口令在同一事务中正式登记，主界面选中新账号。取消使用 close，等待 Closed 后仅清理本次新建的临时目录。旧版本未完成登录／Legacy 在此窗口单独恢复，取消恢复保留原数据。
+- **应用设置**：外侧齿轮打开，只管理全局 API ID / Hash、SOCKS5 和全局敏感凭据清除。配置优先于 `TMSGPICKER_API_ID` / `TMSGPICKER_API_HASH` 环境变量，秘密输入留空保留保存值。保存时安全关闭全部 Client 后重建运行中的账号，主动断开账号继续保持断开。
+- **账号设置**：更多菜单打开，窗口固定绑定打开时的 Profile ID，显示只读 Telegram 身份、状态、断开／恢复、注销及添加新账号。缺少口令时输入原数据库密码继续恢复。不提供改名、独立解锁菜单、记住设备、API、代理或布局设置。注销完成后关闭绑定账号的设置窗口；主窗口切换不改变其操作对象。
 
-启动时为全部已登记 Profile 创建独立 TDLib Client，并发初始化具备保存口令的账号。没有保存口令的 Client 保持“需要解锁”，不提交数据库参数，不生成新密钥。注册表为空时显示“添加账号”，不创建匿名 Client。整个桌面进程只有一个共享 `td_receive` 线程。
+数据位于 `%LOCALAPPDATA%\com.funare.tmsgpicker\`：`app-config.json` 只保存应用配置，`accounts.json` 保存正式账号、主账号和分离的待恢复记录，`credential-store.json` 只保存当前 Windows 用户范围的 DPAPI 密文。旧 `settings.json` 保留为迁移备份，旧栏宽／Compact 字段被忽略，账号与凭据不丢失。三个文件仍通过暂存、flush、Windows 原子替换及回滚日志协调提交，失败恢复旧内存与磁盘，损坏或未来版本明确报错。秘密只由 Rust 解密，读取 IPC 不回填 Vue；新数据库口令只在初始化、Ready、getMe、去重和登记成功后按首次登录选择保存。手机号、验证码、2FA 不持久化，不降级明文。
 
-「添加账号」创建独立 Profile 和 Client；选择账号只切换前端视图，全部客户端继续运行，后台查询继续，切回恢复该账号的聊天、查询条件、结果与选择。普通断开和退出应用使用 `close`；只有经确认的「退出 Telegram 登录」调用 `logOut`，随后等待 TDLib 自行关闭。移除 Profile 默认保留 Session 文件；本地数据删除需二次确认、安全关闭及目录归属／重解析点检查，Legacy 目录不可由此删除。重复 `getMe` 身份不写入冲突 Profile，冲突账号安全断开并提示显式移除；已有账号与目录保持完整。
+Legacy Session 继续使用 `tdlib/db` 和 `tdlib/files`，未识别身份前作为独立恢复记录，不显示占位账号。新账号使用 `tdlib/accounts/<Profile ID>/db` 与 `files`，运行中的数据库不移动目录。原密码仍按既有 Base64 → TDLib bytes 规则传递（Base64 不等于加密）。未记住设备时，下次启动仍需原数据库密码。
+
+启动为全部正式账号创建独立 TDLib Client，具备保存口令的账号并发恢复。无口令账号保留登记和原 Session，Runtime 等待原密码，不使用空密钥或删除数据库。旧恢复记录也可独立启动并完成 getMe 识别。主账号属于 AccountRegistry：优先合法主账号，升级时一次兼容合法的旧 `last_profile_id`，否则选择最早登记的账号。查看其他账号不改变主账号；主账号注销后自动回退，最后一个注销后返回空状态。整个进程仍只有一个共享 `td_receive` 线程。
+
+普通断开和退出应用只使用 `close` 并等待 Closed，保留 Session、登记和保存口令。网络暂断由 TDLib 自行重连，不等于主动断开。**注销账号**需要明确确认，只对指定账号执行 `logOut`，确认 ok 和 Closed 后检查并清理其私有数据库／文件，再删除登记与口令；Legacy 仅清理自己的 `db`、`files`，保护其他账号。响应未确认、关闭超时或清理失败均保留登记并报错；已确认的退出／关闭进度在本进程内可重试，不重复 logOut。重复 getMe 身份不覆盖原账号，新登录安全关闭并提示取消。
+
+Debug 应用设置提供“重置 TMsgPicker（清除全部本地数据）”：列出数据类别并要求输入 `RESET TMsgPicker`，沿用 Pending 发送等待／Unknown 明确确认，阻止新任务，全部 close / Closed 后验证固定应用专属目录和所有祖先／后代无符号链接或 Reparse Point，再清除配置、凭据、全部 Session、Legacy 与缓存。成功退出后需重启，失败明确报错；不执行 Telegram logOut。Release 通过 Rust `cfg(debug_assertions)` 排除命令注册和删除实现。
+
+所有窗口共享 `src/theme.json` 背景 Token。Windows 11 原生标题栏使用 DWM caption、border、text 属性，COLORREF 正确按 BGR 字节转换；旧系统保留原生降级，拖动与系统窗口按钮继续由系统处理。
 
 SOCKS5 服务器填写主机（如 `127.0.0.1`），端口使用实际 SOCKS5/Mixed 监听端口；未设置代理认证时用户名和密码留空。TDLib 不自动跟随 Windows 的 HTTP 代理。
 
-每个 Client 的初始化顺序：先发送 `addProxy(enable=true)` 或 `disableProxy`，随后立即发送 `setTdlibParameters`，两条都发出后再等待响应。**不能先等代理响应再提交参数**：代理请求在缺少参数时排队。先等待参数响应，参数失败清理其余 Pending，不被代理阻塞 45 秒。代理设置成功不表示网络已连通，授权状态与连接状态独立显示。用户选中需要处理的账号后手动打开 Settings 完成授权，不会为多个后台账号自动弹窗。
+每个 Client 的初始化顺序：先发送 `addProxy(enable=true)` 或 `disableProxy`，随后立即发送 `setTdlibParameters`，两条都发出后再等待响应。**不能先等代理响应再提交参数**：代理请求在缺少参数时排队。先等待参数响应，参数失败清理其余 Pending，不被代理阻塞 45 秒。代理设置成功不表示网络已连通，授权状态与连接状态独立显示。新账号在 LoginWindow 授权；现有 Session 确实失效时在绑定账号设置重新授权，不为后台账号自动弹窗。
 
 ## 查询语义
 
@@ -69,7 +79,7 @@ pnpm.cmd test # Node 22.18+ / 24，Vue 内存渲染器；不访问 Telegram
 
 现有 `src-tauri/src/bin/tdlib_smoke.rs` / `tdlib_auth.rs` 保持可用。`tdlib_auth` 是原有手动工具，代理设置及打印方式仍采用原来的 bring-up 代码；日常使用新的桌面授权服务，不将旧 CLI 的输出当作可分享诊断。
 
-三栏与多账号交付记录见 [第一轮验收](docs/UI_ACCOUNTS_ACCEPTANCE.md)，当前紧凑卡片、独立窗口与隐形 Splitter 的验证及操作步骤见 [第二轮 UI 验收](docs/UI_REFINEMENT_ACCEPTANCE.md)。本机运行：`pnpm.cmd tauri dev`，或构建 `pnpm.cmd tauri build --debug --no-bundle` 后启动 `src-tauri/target/debug/tmsgpicker.exe`（同目录需 staging 的 DLL）。
+此前三栏与多账号记录见 [第一轮验收](docs/UI_ACCOUNTS_ACCEPTANCE.md) 和 [第二轮 UI 验收](docs/UI_REFINEMENT_ACCEPTANCE.md)；当前账号生命周期、三个独立入口与测试结果见 [本轮交付记录](docs/ACCOUNT_LIFECYCLE_ACCEPTANCE.md)。本机运行：`pnpm.cmd tauri dev`，或构建 `pnpm.cmd tauri build --debug --no-bundle` 后启动 `src-tauri/target/debug/tmsgpicker.exe`（同目录需 staging 的 DLL）。
 
 ## 开发接口与部署限制
 

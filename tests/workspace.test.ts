@@ -3,8 +3,10 @@ import assert from 'node:assert/strict';
 import { createRenderer, h } from 'vue';
 import { createAccountViews } from '../src/accountViews.ts';
 import { useWorkspace } from '../src/useWorkspace.ts';
+import {createSSRApp} from 'vue';
+import {renderToString} from 'vue/server-renderer';
 
-const status = (id: string, generation=1) => ({profile_id:id,generation,runtime_state:'Ready',auth_state:'authorizationStateReady',connection_state:'connectionStateReady',detail:''});
+const status = (id: string, generation=1) => ({profile_id:id,generation,runtime_state:'Ready',auth_state:'authorizationStateReady',connection_state:'connectionStateReady',detail:'',user_disconnected:false});
 const scan = (run_id: string, scanned: number) => ({run_id,scanned,status:'Complete' as const,pages:1,exact:true,detail:'',posts:[]});
 test('background query and send updates belong to the profile, even with identical run and message IDs', () => {
   const state=createAccountViews();
@@ -97,8 +99,26 @@ test('pending wait does not close early or erase unsaved global secrets',async()
   const calls:string[]=[],emissions:string[]=[];let w!:ReturnType<typeof useWorkspace>;
   const transport=async(command:string)=>{calls.push(command);if(command==='close_guard')return {pending_count:1,retry_after_ms:30000,token:null};};
   const app=renderer.createApp({setup(){w=useWorkspace(false,transport as Parameters<typeof useWorkspace>[1],(async(name:string)=>{emissions.push(name);}) as Parameters<typeof useWorkspace>[2]);return()=>h('div');}});app.mount({});w.profileId.value='A';
-  w.snapshot.value={settings:{schema_version:1,api_id:1,proxy_enabled:false,proxy_server:'localhost',proxy_port:1080,proxy_username:'',last_profile_id:'A',left_ratio:.23,right_ratio:.29,card_compact:false},profiles:[],has_saved_api_hash:true,has_saved_proxy_password:false};
+  w.snapshot.value={settings:{schema_version:1,api_id:1,proxy_enabled:false,proxy_server:'localhost',proxy_port:1080,proxy_username:''},profiles:[],has_saved_api_hash:true,has_saved_proxy_password:false,primary_profile_id:null,interrupted_profiles:[],debug_tools:true};
   w.apiHash.value='unsaved synthetic hash';const save=w.saveSettings();await new Promise(resolve=>setImmediate(resolve));
   assert.match(w.dialog.value?.text??'',/30/);w.answerDialog({text:'',deleteData:false});await save;
   assert.deepEqual(calls,['close_guard']);assert.deepEqual(emissions,[]);assert.equal(w.apiHash.value,'unsaved synthetic hash');app.unmount();
+});
+test('add uses a dedicated login service, settings carry explicit IDs and dragging does not write IPC',async()=>{
+  const calls:Array<{command:string;args:unknown}>=[];let w!:ReturnType<typeof useWorkspace>;
+  const transport=async(command:string,args:unknown)=>{calls.push({command,args});};
+  await renderToString(createSSRApp({setup(){w=useWorkspace(false,transport as Parameters<typeof useWorkspace>[1]);return()=>h('div');}}));
+  assert.equal(w.profileId.value,'');assert.equal(w.snapshot.value,null);
+  await w.addAccount();assert.equal(w.profileId.value,'');
+  await w.openSettings();w.profileId.value='A';await w.openAccountSettings();
+  w.resizeLayout(.3,.4);assert.equal(w.leftRatio.value,.3);w.resetLayout();assert.equal(w.leftRatio.value,.23);assert.equal(w.rightRatio.value,.29);
+  assert.deepEqual(calls,[{command:'open_login',args:undefined},{command:'open_settings',args:{profileId:null}},{command:'open_settings',args:{profileId:'A'}}]);
+});
+test('bound account settings target remains A while another window switches its active view to B',async()=>{
+  const calls:Array<{command:string;args:unknown}>=[];let account!:ReturnType<typeof useWorkspace>,main!:ReturnType<typeof useWorkspace>;
+  const transport=async(command:string,args:unknown)=>{calls.push({command,args});if(command==='close_guard')return {pending_count:0,retry_after_ms:0,token:null};};
+  await renderToString(createSSRApp({setup(){account=useWorkspace(true,transport as Parameters<typeof useWorkspace>[1],(async()=>{}) as Parameters<typeof useWorkspace>[2]);main=useWorkspace(false,transport as Parameters<typeof useWorkspace>[1]);return()=>h('div');}}));
+  account.profileId.value='A';main.profileId.value='B';await main.selectAccount();
+  await account.disconnect();
+  assert.equal(account.profileId.value,'A');assert.deepEqual(calls.at(-1),{command:'disconnect',args:{profileId:'A',closeConfirmation:null}});
 });

@@ -16,6 +16,11 @@ use std::{
     time::{Duration, Instant},
 };
 use tauri::{Emitter, Manager, State};
+#[path = "login.rs"]
+mod login;
+use login::*;
+#[path = "window_theme.rs"]
+mod window_theme;
 
 #[derive(Clone, Serialize)]
 struct Connection {
@@ -25,6 +30,7 @@ struct Connection {
     auth_state: String,
     connection_state: String,
     detail: String,
+    user_disconnected: bool,
 }
 impl Default for Connection {
     fn default() -> Self {
@@ -35,6 +41,7 @@ impl Default for Connection {
             auth_state: "Disconnected".into(),
             connection_state: "Disconnected".into(),
             detail: "请输入配置并连接".into(),
+            user_disconnected: false,
         }
     }
 }
@@ -42,11 +49,19 @@ impl Default for Connection {
 struct AppState {
     lifecycle: RwLock<()>,
     settings_window: Mutex<()>,
+    pending_login: Mutex<Option<PendingLogin>>,
     store: Mutex<Option<Store>>,
     manager: TdlibRuntimeManager,
     exiting: AtomicBool,
+    reset_cleanup_pending: AtomicBool,
     close_approvals: Mutex<HashMap<String, CloseApproval>>,
     approval_sequence: AtomicU64,
+}
+struct PendingLogin {
+    profile_id: String,
+    phone: Option<String>,
+    remember_database: bool,
+    newly_created: bool,
 }
 #[derive(Default)]
 struct TdlibRuntimeManager {
@@ -62,6 +77,8 @@ struct AccountRuntime {
     gateway: Mutex<Option<Arc<TdlibGateway>>>,
     connecting: AtomicBool,
     closing: AtomicBool,
+    user_disconnected: AtomicBool,
+    logout_progress: Mutex<crate::services::LogoutProgress>,
     connection: Mutex<Connection>,
     active: Mutex<Option<(String, Arc<AtomicBool>)>>,
     results: Mutex<Option<ScanResult>>,
@@ -249,9 +266,7 @@ fn approve_and_emit(
     Ok(())
 }
 fn account(s: &AppState, id: &str) -> Result<Arc<AccountRuntime>> {
-    if s.exiting.load(Ordering::SeqCst) {
-        return Err("Application is shutting down".into());
-    }
+    ensure_running(s)?;
     s.manager
         .accounts
         .lock()
@@ -259,6 +274,15 @@ fn account(s: &AppState, id: &str) -> Result<Arc<AccountRuntime>> {
         .get(id)
         .cloned()
         .ok_or("Unknown account".into())
+}
+fn ensure_running(s: &AppState) -> Result<()> {
+    if s.reset_cleanup_pending.load(Ordering::SeqCst) {
+        return Err("本地重置清理未完成，请重试 Debug 重置或退出应用".into());
+    }
+    if s.exiting.load(Ordering::SeqCst) {
+        return Err("Application is shutting down".into());
+    }
+    Ok(())
 }
 fn accounts(s: &AppState) -> Vec<Arc<AccountRuntime>> {
     s.manager
@@ -402,61 +426,40 @@ fn update(app: &tauri::AppHandle, profile_id: &str, epoch: u64, v: Value) {
         let _ = app.emit("connection", connection);
         if ready {
             let handle = app.clone();
-            let account_id = profile_id.to_owned();
+            let runtime = s.clone();
+            tauri::async_runtime::spawn_blocking(move || {
+                complete_identity(&handle, &runtime, epoch)
+            });
+        }
+        if v["authorization_state"]["@type"] == "authorizationStateWaitPhoneNumber" {
+            let handle = app.clone();
+            let runtime = s.clone();
             tauri::async_runtime::spawn_blocking(move || {
                 let global = handle.state::<AppState>();
-                let Ok(s) = account(&global, &account_id) else {
+                let _gate = global.lifecycle.read().unwrap();
+                let _lock = runtime.lifecycle.lock().unwrap();
+                if !current_epoch(&runtime, epoch) || global.exiting.load(Ordering::SeqCst) {
                     return;
-                };
-                let id = Some(s.profile_id.clone());
-                let g = s.gateway.lock().unwrap().clone();
-                if let Some(g) = g {
-                    let me = g.request(json!({"@type":"getMe"}), &AtomicBool::new(false));
-                    if !current_epoch(&s, epoch) {
-                        return;
-                    }
-                    if let Ok(me) = me
-                        && let Some(id) = id
-                    {
-                        let outcome = with_store(&global, |store| {
-                            if !current_epoch(&s, epoch) {
-                                return Ok(false);
-                            }
-                            store.identify(&id, &me)
-                        });
-                        match outcome {
-                            Ok(duplicate) => {
-                                let _ = handle.emit("accounts-changed", ());
-                                if duplicate {
-                                    // Resolve conflict without changing the registered identity or deleting data.
-                                    let _gate = global.lifecycle.read().unwrap();
-                                    let _lock = s.lifecycle.lock().unwrap();
-                                    if current_epoch(&s, epoch) {
-                                        let closed = close_session(&handle, &s, false);
-                                        let detail = match closed {
-                                            Ok(()) => "重复 Telegram 用户；冲突账号已安全断开，请显式移除多余 Profile".to_string(),
-                                            Err(e) => format!("重复 Telegram 用户；安全断开未完成：{e}。请等待后重试断开并移除冲突 Profile"),
-                                        };
-                                        set_runtime_state(&handle, &s, "Error", &detail);
-                                        let _ = handle.emit(
-                                            "account-notice",
-                                            json!({"profile_id":account_id,"detail":detail}),
-                                        );
-                                    }
-                                }
-                            }
-                            Err(_) => {
-                                let _ = handle.emit(
-                                    "account-notice",
-                                    json!({"profile_id":account_id,"detail":"账号身份已读取但保存失败；请检查配置目录。"}),
-                                );
-                            }
-                        }
+                }
+                let phone = global
+                    .pending_login
+                    .lock()
+                    .unwrap()
+                    .as_mut()
+                    .filter(|p| p.profile_id == runtime.profile_id)
+                    .and_then(|p| p.phone.take());
+                if let Some(phone) = phone {
+                    let outcome = client(&runtime).and_then(|g| {
+                        AuthService::submit(g.as_ref(), "authorizationStateWaitPhoneNumber", phone)
+                    });
+                    if let Err(error) = outcome {
+                        let _ = handle.emit("login-error", error);
                     }
                 }
             });
         }
     }
+
     if v["@type"] == "updateMessageSendSucceeded" || v["@type"] == "updateMessageSendFailed" {
         let target = v["message"]["chat_id"].as_i64().unwrap_or(0).to_string();
         let old = v["old_message_id"].as_i64().unwrap_or(0).to_string();
@@ -511,55 +514,55 @@ fn with_store<T>(s: &AppState, f: impl FnOnce(&mut Store) -> Result<T>) -> Resul
     }
     f(guard.as_mut().unwrap())
 }
-#[tauri::command]
-async fn open_settings(app: tauri::AppHandle, profile_id: Option<String>) -> Result<()> {
-    // Build WebView2 off the synchronous command thread; serialize duplicate clicks.
-    background(move || {
-        let s = app.state::<AppState>();
-        let _window_lock = s.settings_window.lock().unwrap();
-        if let Some(id) = &profile_id {
-            with_store(&s, |store| store.profile(id).map(|_| ()))?;
-        }
-        if let Some(window) = app.get_webview_window("settings") {
-            window
-                .emit("settings-focus-profile", &profile_id)
-                .map_err(|_| "Cannot update Settings window")?;
-            window
-                .unminimize()
-                .and_then(|_| window.show())
-                .and_then(|_| window.set_focus())
-                .map_err(|_| "Cannot focus Settings window")?;
-        } else {
-            let url = match profile_id {
-                Some(id) => format!("index.html?view=settings&profile={id}"),
-                None => "index.html?view=settings".into(),
-            };
-            tauri::WebviewWindowBuilder::new(&app, "settings", tauri::WebviewUrl::App(url.into()))
-                .title("设置")
+fn open_auxiliary(app: &tauri::AppHandle, label: &str, url: &str, title: &str) -> Result<()> {
+    if let Some(window) = app.get_webview_window(label) {
+        window
+            .unminimize()
+            .and_then(|_| window.show())
+            .and_then(|_| window.set_focus())
+            .map_err(|_| "Cannot focus window")?;
+    } else {
+        let window =
+            tauri::WebviewWindowBuilder::new(app, label, tauri::WebviewUrl::App(url.into()))
+                .title(title)
                 .inner_size(500.0, 580.0)
                 .min_inner_size(420.0, 440.0)
                 .maximizable(false)
                 .center()
                 .build()
-                .map_err(|_| "Cannot open Settings window")?;
-        }
-        Ok(())
-    })
-    .await
+                .map_err(|_| "Cannot open window")?;
+        window_theme::apply(&window);
+    }
+    Ok(())
 }
 #[tauri::command]
-async fn close_settings(app: tauri::AppHandle) -> Result<()> {
+async fn open_settings(app: tauri::AppHandle, profile_id: Option<String>) -> Result<()> {
     background(move || {
-        if let Some(window) = app.get_webview_window("settings") {
-            window.close().map_err(|_| "Cannot close Settings window")?;
+        let s = app.state::<AppState>();
+        let _gate = s
+            .lifecycle
+            .try_read()
+            .map_err(|_| "Application transition in progress")?;
+        if s.exiting.load(Ordering::SeqCst) {
+            return Err("Application is shutting down".into());
         }
-        Ok(())
+        if s.reset_cleanup_pending.load(Ordering::SeqCst) {
+            return Err("本地重置清理未完成，请重试 Debug 重置".into());
+        }
+        let _window_lock = s.settings_window.lock().unwrap();
+        if let Some(id) = profile_id {
+            with_store(&s, |store| store.select(&id))?;
+            open_auxiliary(
+                &app,
+                &format!("account-{id}"),
+                &format!("index.html?view=account&profile={id}"),
+                "账号设置",
+            )
+        } else {
+            open_auxiliary(&app, "settings", "index.html?view=settings", "应用设置")
+        }
     })
     .await
-}
-#[tauri::command]
-fn save_ui_preferences(s: State<AppState>, card_compact: bool) -> Result<()> {
-    with_store(&s, |store| store.set_card_compact(card_compact))
 }
 fn route_window_close(label: &str, main_close: impl FnOnce()) {
     if label == "main" {
@@ -585,6 +588,18 @@ fn rebuild_accounts(app: &tauri::AppHandle) -> Result<()> {
             let handle = app.clone();
             std::thread::spawn(move || {
                 let id = s.profile_id.clone();
+                if s.logout_progress.lock().unwrap().confirmed {
+                    set_runtime_state(
+                        &handle,
+                        &s,
+                        "LogoutCleanupRequired",
+                        "Telegram 授权已注销，请重试完成本地清理",
+                    );
+                    return;
+                }
+                if s.user_disconnected.load(Ordering::SeqCst) {
+                    return;
+                }
                 set_runtime_state(
                     &handle,
                     &s,
@@ -635,17 +650,15 @@ async fn save_settings(
         if s.exiting.load(Ordering::SeqCst) {
             return Err("Application is shutting down".into());
         }
+        if s.reset_cleanup_pending.load(Ordering::SeqCst) {
+            return Err("本地重置清理未完成，请重试 Debug 重置".into());
+        }
         // Validate before interrupting any clients.
         Store::validate_settings(&edit.settings)?;
         close_all(&app, close_confirmation)?;
         let snapshot = with_store(&s, |store| {
-            // Preserve the latest UI preferences instead of writing the editor's stale snapshot.
             let mut settings = edit.settings;
-            let latest = store.settings();
-            settings.left_ratio = latest.left_ratio;
-            settings.right_ratio = latest.right_ratio;
-            settings.card_compact = latest.card_compact;
-            settings.last_profile_id = latest.last_profile_id;
+            settings.last_profile_id = None;
             store.edit_application_config(settings, edit.api_hash, edit.proxy_password)?;
             Ok(store.snapshot())
         })?;
@@ -654,15 +667,6 @@ async fn save_settings(
         Ok(snapshot)
     })
     .await
-}
-#[tauri::command]
-fn save_layout(s: State<AppState>, left: f64, right: f64) -> Result<()> {
-    with_store(&s, |store| {
-        let mut settings = store.settings();
-        settings.left_ratio = left;
-        settings.right_ratio = right;
-        store.set_settings(settings)
-    })
 }
 #[tauri::command]
 async fn reset_settings(
@@ -675,6 +679,7 @@ async fn reset_settings(
             .lifecycle
             .try_write()
             .map_err(|_| "Application transition in progress")?;
+        ensure_running(&s)?;
         close_all(&app, close_confirmation)?;
         let snapshot = with_store(&s, |store| {
             store.reset()?;
@@ -698,6 +703,7 @@ async fn clear_secret(
             .lifecycle
             .try_write()
             .map_err(|_| "Application transition in progress")?;
+        ensure_running(&s)?;
         if global_key {
             close_all(&app, close_confirmation)?;
         }
@@ -709,68 +715,6 @@ async fn clear_secret(
             rebuild_accounts(&app)?;
         }
         Ok(snapshot)
-    })
-    .await
-}
-#[tauri::command]
-fn add_account(app: tauri::AppHandle, name: String) -> Result<String> {
-    let s = app.state::<AppState>();
-    let _lock = s
-        .lifecycle
-        .try_read()
-        .map_err(|_| "Application transition in progress")?;
-    if s.exiting.load(Ordering::SeqCst) {
-        return Err("Application is shutting down".into());
-    }
-    let id = with_store(&s, |store| store.add(name))?;
-    create_runtime(&app, &id)?;
-    Ok(id)
-}
-#[tauri::command]
-fn rename_account(s: State<AppState>, profile_id: String, name: String) -> Result<Snapshot> {
-    with_store(&s, |store| {
-        store.rename(&profile_id, name)?;
-        Ok(store.snapshot())
-    })
-}
-#[tauri::command]
-async fn remove_account(
-    app: tauri::AppHandle,
-    profile_id: String,
-    confirmed: bool,
-    delete_data: bool,
-    delete_confirmed: bool,
-) -> Result<Snapshot> {
-    background(move || {
-        let s = app.state::<AppState>();
-        let _lock = s
-            .lifecycle
-            .try_write()
-            .map_err(|_| "Session operation in progress")?;
-        if !confirmed {
-            return Err("Confirm local profile removal".into());
-        }
-        if delete_data && !delete_confirmed {
-            return Err("Second confirmation required for Session deletion".into());
-        }
-        let runtime = account(&s, &profile_id)?;
-        let _account_lock = runtime
-            .lifecycle
-            .try_lock()
-            .map_err(|_| "Account operation in progress")?;
-        close_session(&app, &runtime, false)?;
-        // Session deletion is opt-in and separately confirmed; legacy deletion is refused.
-        with_store(&s, |store| {
-            if delete_data {
-                if !delete_confirmed {
-                    return Err("Second confirmation required for Session deletion".into());
-                }
-                store.delete_session(&profile_id)?;
-            }
-            store.remove(&profile_id)?;
-            s.manager.accounts.lock().unwrap().remove(&profile_id);
-            Ok(store.snapshot())
-        })
     })
     .await
 }
@@ -792,11 +736,17 @@ fn current_epoch(s: &AccountRuntime, epoch: u64) -> bool {
 }
 fn finish_close(s: &AccountRuntime, outcome: Result<()>) -> Result<Connection> {
     outcome?;
+    if let Ok(mut progress) = s.logout_progress.try_lock()
+        && progress.confirmed
+    {
+        progress.closed = true;
+    }
     *s.gateway.lock().unwrap() = None;
     s.epoch.fetch_add(1, Ordering::SeqCst);
     let c = Connection {
         profile_id: Some(s.profile_id.clone()),
         generation: s.epoch.load(Ordering::SeqCst),
+        user_disconnected: s.user_disconnected.load(Ordering::SeqCst),
         ..Connection::default()
     };
     *s.connection.lock().unwrap() = c.clone();
@@ -834,7 +784,7 @@ struct ActivateConfig {
 }
 fn create_runtime(app: &tauri::AppHandle, id: &str) -> Result<Arc<AccountRuntime>> {
     let global = app.state::<AppState>();
-    with_store(&global, |store| store.profile(id).map(|_| ()))?;
+    let logout_pending = with_store(&global, |store| Ok(store.profile(id)?.logout_pending))?;
     let mut map = global.manager.accounts.lock().unwrap();
     if let Some(r) = map.get(id) {
         return Ok(r.clone());
@@ -852,6 +802,20 @@ fn create_runtime(app: &tauri::AppHandle, id: &str) -> Result<Arc<AccountRuntime
     // Publish before native callbacks; callback blocks on map only until registration ends.
     map.insert(id.into(), r.clone());
     drop(map);
+    if logout_pending {
+        *r.logout_progress.lock().unwrap() = crate::services::LogoutProgress {
+            confirmed: true,
+            closed: true,
+            recorded: true,
+        };
+        set_runtime_state(
+            app,
+            &r,
+            "LogoutCleanupRequired",
+            "上次已确认注销，请重试完成本地清理",
+        );
+        return Ok(r);
+    }
     if let Err(e) = create_client(app, &r) {
         set_runtime_state(app, &r, "Error", &e);
     }
@@ -881,6 +845,9 @@ fn initialize_account(app: &tauri::AppHandle, config: ActivateConfig) -> Result<
         .lifecycle
         .try_lock()
         .map_err(|_| "Account operation in progress")?;
+    if s.logout_progress.lock().unwrap().confirmed {
+        return Err("此账号已确认注销，请先重试完成本地清理".into());
+    }
     if s.closing.load(Ordering::SeqCst) {
         return Err("Account is closing; retry disconnect first".into());
     }
@@ -933,6 +900,8 @@ fn initialize_account(app: &tauri::AppHandle, config: ActivateConfig) -> Result<
     if recreate {
         create_client(app, &s)?;
     }
+    s.user_disconnected.store(false, Ordering::SeqCst);
+    s.connection.lock().unwrap().user_disconnected = false;
     s.connecting.store(true, Ordering::SeqCst);
     set_runtime_state(app, &s, "Initializing", "正在初始化此账号");
     let g = s
@@ -946,6 +915,9 @@ fn initialize_account(app: &tauri::AppHandle, config: ActivateConfig) -> Result<
         *s.unlocked_passphrase.lock().unwrap() = Some(key.clone());
         // Remember a new key only after TDLib accepts it for this profile's database.
         with_store(&global, |store| {
+            if store.is_pending(&config.profile_id) {
+                return Ok(());
+            }
             store.set_secret(
                 &format!("db:{}", config.profile_id),
                 if config.remember_database {
@@ -976,7 +948,7 @@ fn initialize_account(app: &tauri::AppHandle, config: ActivateConfig) -> Result<
 }
 fn start_accounts(app: &tauri::AppHandle) -> Result<()> {
     let global = app.state::<AppState>();
-    let ids = with_store(&global, |store| Ok(store.profile_ids()))?;
+    let ids = with_store(&global, |store| Ok(store.runtime_profile_ids()))?;
     // Create all clients before starting any blocking bootstrap.
     for id in &ids {
         create_runtime(app, id)?;
@@ -1066,8 +1038,15 @@ async fn disconnect(
             .lifecycle
             .try_lock()
             .map_err(|_| "Session operation in progress")?;
+        if s.logout_progress.lock().unwrap().confirmed {
+            return Err("此账号正在完成注销，请在账号设置中重试清理".into());
+        }
         approve_and_emit(&app, std::slice::from_ref(&s), close_confirmation)?;
-        close_session(&app, &s, false)
+        close_session(&app, &s, false)?;
+        s.user_disconnected.store(true, Ordering::SeqCst);
+        s.connection.lock().unwrap().user_disconnected = true;
+        let _ = app.emit("connection", s.connection.lock().unwrap().clone());
+        Ok(())
     })
     .await
 }
@@ -1087,10 +1066,56 @@ async fn logout_account(app: tauri::AppHandle, profile_id: String, confirmed: bo
         if !confirmed {
             return Err("Confirm logout of the active account".into());
         }
-        if s.connection.lock().unwrap().auth_state != "authorizationStateReady" {
-            return Err("Account must be ready to log out".into());
+        let mut progress = s.logout_progress.lock().unwrap();
+        if !progress.confirmed
+            && s.connection.lock().unwrap().auth_state != "authorizationStateReady"
+        {
+            return Err("请先恢复此账号连接，再注销账号".into());
         }
-        close_session(&app, &s, true)
+        can_transition(&s)?;
+        s.closing.store(true, Ordering::SeqCst);
+        clear_session(&s);
+        set_runtime_state(&app, &s, "Closing", "正在注销 Telegram 授权");
+        let g = s.gateway.lock().unwrap().clone();
+        let outcome = progress.execute(
+            g.as_ref()
+                .map(|g| g.as_ref() as &dyn crate::gateway::SessionLifecycle),
+            || with_store(&global, |store| store.mark_logout_pending(&profile_id)),
+            || {
+                finish_close(&s, Ok(()))?;
+                with_store(&global, |store| {
+                    store.cleanup_logged_out_session(&profile_id)?;
+                    store.remove(&profile_id)
+                })
+            },
+        );
+        if let Err(error) = outcome {
+            if progress.confirmed {
+                set_runtime_state(
+                    &app,
+                    &s,
+                    "LogoutCleanupRequired",
+                    &format!("注销尚未完成，请重试：{error}"),
+                );
+            } else {
+                if error.starts_with("TDLib error ") {
+                    s.closing.store(false, Ordering::SeqCst);
+                }
+                set_runtime_state(
+                    &app,
+                    &s,
+                    "Error",
+                    &format!("Telegram 未确认注销，账号登记仍保留：{error}"),
+                );
+            }
+            return Err(error);
+        }
+        global.manager.accounts.lock().unwrap().remove(&profile_id);
+        let _ = app.emit("accounts-changed", ());
+        if let Some(window) = app.get_webview_window(&format!("account-{profile_id}")) {
+            let _ = window.close();
+        }
+        Ok(())
     })
     .await
 }
@@ -1503,6 +1528,24 @@ mod tests {
         assert!(can_transition(&s).is_ok());
     }
     #[test]
+    fn incomplete_reset_refuses_new_account_work_but_keeps_close_inventory() {
+        let global = AppState::default();
+        let runtime = Arc::new(AccountRuntime {
+            profile_id: "p-a".into(),
+            ..AccountRuntime::default()
+        });
+        global
+            .manager
+            .accounts
+            .lock()
+            .unwrap()
+            .insert("p-a".into(), runtime);
+        global.reset_cleanup_pending.store(true, Ordering::SeqCst);
+        assert!(ensure_running(&global).is_err());
+        assert!(account(&global, "p-a").is_err());
+        assert_eq!(accounts(&global).len(), 1); // Reset retry / safe exit can still close every client.
+    }
+    #[test]
     fn old_run_cannot_replace_new_results_or_forward_stale_selection() {
         let s = AccountRuntime::default();
         *s.active.lock().unwrap() = Some(("new".into(), Arc::new(AtomicBool::new(false))));
@@ -1724,12 +1767,65 @@ fn begin_safe_exit(app: &tauri::AppHandle, close_confirmation: Option<String>) {
         }
     });
 }
+#[cfg(debug_assertions)]
+#[tauri::command]
+async fn debug_reset(
+    app: tauri::AppHandle,
+    phrase: String,
+    close_confirmation: Option<String>,
+) -> Result<()> {
+    background(move || {
+        if phrase != "RESET TMsgPicker" {
+            return Err("请输入确认短语 RESET TMsgPicker".into());
+        }
+        let global = app.state::<AppState>();
+        let _gate = global
+            .lifecycle
+            .try_write()
+            .map_err(|_| "Application transition in progress")?;
+        if global.exiting.swap(true, Ordering::SeqCst) {
+            return Err("Application is shutting down".into());
+        }
+        let outcome = (|| {
+            let root = with_store(&global, |store| Ok(store.root.clone()))?;
+            let expected = std::env::var_os("LOCALAPPDATA")
+                .map(std::path::PathBuf::from)
+                .ok_or("LOCALAPPDATA unavailable")?
+                .join("com.funare.tmsgpicker");
+            if root != expected {
+                return Err("Debug reset ownership check failed".into());
+            }
+            crate::managed_data::validate_owned(&expected, &root)?;
+            close_all(&app, close_confirmation)?;
+            global.reset_cleanup_pending.store(true, Ordering::SeqCst);
+            crate::managed_data::delete_owned(&expected, &root)?;
+            *global.store.lock().unwrap() = None;
+            global.pending_login.lock().unwrap().take();
+            global.manager.accounts.lock().unwrap().clear();
+            Ok(())
+        })();
+        match outcome {
+            Ok(()) => {
+                app.exit(0);
+                Ok(())
+            }
+            Err(error) => {
+                global.exiting.store(false, Ordering::SeqCst);
+                Err(error)
+            }
+        }
+    })
+    .await
+}
 pub fn run() {
     let app = tauri::Builder::default()
         .manage(AppState::default())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let handle = app.handle().clone();
+            if let Some(main) = app.get_webview_window("main") {
+                window_theme::apply(&main);
+            }
             // Register all profiles during setup; initialize in independent workers.
             if let Err(e) = start_accounts(&handle) {
                 let _ = handle.emit("app-error", e);
@@ -1737,7 +1833,27 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "login" && matches!(event, tauri::WindowEvent::Destroyed) {
+                let app = window.app_handle().clone();
+                tauri::async_runtime::spawn_blocking(move || {
+                    if let Err(error) = cancel_pending_login(&app) {
+                        let _ = app.emit(
+                            "app-error",
+                            format!("登录窗口已关闭，但临时会话清理未完成：{error}"),
+                        );
+                    }
+                });
+            }
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() == "login" {
+                    api.prevent_close();
+                    let app = window.app_handle().clone();
+                    tauri::async_runtime::spawn_blocking(move || {
+                        if let Err(error) = cancel_pending_login(&app) {
+                            let _ = app.emit("login-error", error);
+                        }
+                    });
+                }
                 route_window_close(window.label(), || {
                     api.prevent_close();
                     begin_safe_exit(window.app_handle(), None);
@@ -1746,16 +1862,17 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             open_settings,
-            close_settings,
-            save_ui_preferences,
+            open_login,
+            begin_login,
+            login_status,
+            retry_login_identity,
+            cancel_login,
+            #[cfg(debug_assertions)]
+            debug_reset,
             app_settings,
             save_settings,
-            save_layout,
             reset_settings,
             clear_secret,
-            add_account,
-            rename_account,
-            remove_account,
             logout_account,
             connection_status,
             close_guard,

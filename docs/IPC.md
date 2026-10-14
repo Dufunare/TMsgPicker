@@ -8,9 +8,9 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 
 | 命令 | 参数 | 返回 |
 |---|---|---|
-| `connection_status` | `{profileId}` | `{profile_id,generation,runtime_state,auth_state,connection_state,detail}` |
+| `connection_status` | `{profileId}` | `{profile_id,generation,runtime_state,auth_state,connection_state,detail,user_disconnected}` |
 | `account_statuses` | 无 | 全部 Profile 的 Connection 快照；不含 Client ID |
-| `select_profile` | `{profileId}` | 只保存上次查看的 Profile；不创建、初始化、关闭或注销 Client |
+| `select_profile` | `{profileId}` | 只验证正式 Profile，选择在前端当前窗口内生效；不写配置、不改变主账号，不创建、初始化、关闭或注销 Client |
 | `connect` | `{config:{profile_id,passphrase:string|null,remember_database:boolean}}` | 解锁指定账号的未初始化 Client；如已 Closed 则重建此 Client；不影响其他 Profile。所有 Client 共用后端全局配置 |
 | `auth_submit` | `{profileId,value}` | 按指定账号实际授权状态提交手机号／代码／密码／邮箱 |
 | `disconnect` | `{profileId,closeConfirmation?:string|null}` | 只取消此账号查询、close 并等 Closed；超时 Pending 需提交经用户确认的令牌；不注销、不删除目录 |
@@ -30,25 +30,27 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 
 | 命令 | 顶层参数 | 返回/行为 |
 |---|---|---|
-| `open_settings` | `{profileId:string|null}` | 创建唯一 settings WebviewWindow，或聚焦已有窗口并发送 settings-focus-profile；后端验证 Profile，不接受 URL/路径 |
-| `close_settings` | 无 | 仅关闭 settings，不触发会话关闭 |
-| `save_ui_preferences` | `{cardCompact:boolean}` | 仅保存折叠偏好，保留 API、Profile、秘密与布局 |
+| `open_settings` | `{profileId:string|null}` | null 打开／聚焦 `settings` 应用设置；正式 ID 打开／聚焦 `account-<id>`，URL 永久绑定该 ID。后端验证正式账号，不接受 URL 或路径 |
+| `open_login` | 无 | 打开／聚焦唯一 `login` 窗口；不创建正式账号，也不跳转到设置 |
+| `begin_login` | `{config:{phone,passphrase,remember_database,recovery_profile_id:string|null}}` | Profile ID；验证全局 API，分配唯一 ID 和最终隔离目录，创建 PendingLogin / Client 并初始化。只有 Ready 和 getMe 去重成功才正式登记。phone 仅保留在内存到实际 WaitPhoneNumber；recovery ID 仅允许已有待恢复记录，必须复用原目录和原密码 |
+| `login_status` | 无 | `Connection|null`；当前 PendingLogin 快照，先监听再读取 |
+| `retry_login_identity` | 无 | Ready 后重试 getMe / 去重 / 原子登记；错误通过 `login-error` 告知，保持 PendingLogin |
+| `cancel_login` | 无 | close → Closed → 清理本次新建的独立 Session 和待登录记录；取消旧记录恢复只关闭 Client、保留原数据。绝不 logOut |
 | `app_settings` | 无 | `SettingsSnapshot`，仅非敏感字段及 has_saved_* |
-| `save_settings` | `{edit:{settings,api_hash:string|null,proxy_password:string|null},closeConfirmation?:string|null}` | Snapshot；秘密 null 保持；安全关闭全部 Client 后统一保存并并发重建。保留最新布局／折叠／上次查看偏好。各账号失败通过 connection 事件报告 |
-| `save_layout` | `{left:number,right:number}` | 保存列宽比例，连接期间允许 |
-| `reset_settings` | `{closeConfirmation?:string|null}` | Snapshot；安全关闭／重建全部账号，仅重置普通配置，保留凭据／Profile／Session |
+| `save_settings` | `{edit:{settings,api_hash:string|null,proxy_password:string|null},closeConfirmation?:string|null}` | Snapshot；秘密 null 保持，安全关闭全部 Client 后统一保存并并发重建运行中的账号，主动断开账号保持断开；不写栏宽、Compact、当前查看账号 |
+| `reset_settings` | `{closeConfirmation?:string|null}` | 兼容普通配置重置，未在 UI 提供；保留注册表、主账号、凭据和 Session，安全重建 |
 | `clear_secret` | `{key:"api"\|"proxy"\|"db:<profile_id>",closeConfirmation?:string|null}` | Snapshot；全局秘密清除会安全重建全部 Client，proxy 同一持久化事务清空密码与用户名；清除 db 只取消对应保存副本，当前解锁会话不关闭 |
-| `add_account` | `{name}` | 内部 Profile ID；持久化独立 Profile，创建等待数据库口令的 Client；不接受前端目录 |
-| `rename_account` | `{profileId,name}` | Snapshot，本地别名 |
-| `remove_account` | `{profileId,confirmed,deleteData,deleteConfirmed}` | Snapshot；先安全关闭指定账号，默认保留 Session；删除数据要求二次确认和路径归属检查，禁止删除 Legacy |
-| `logout_account` | `{profileId,confirmed:true}` | 指定已授权账号，UI 和后端均要求确认；logOut 后等 TDLib 自行 Closed，不追加 close；其他账号继续运行 |
+| `logout_account` | `{profileId,confirmed:true}` | 仅指定账号：确认 logOut 的 ok 和 Closed 后清理其私有 Session，再原子删除登记及口令。失败保留登记；本进程保存确认／关闭进度以便重试，不重复 logOut。主账号自动回退，最后一个账号删除后为空 |
+| `debug_reset` | `{phrase:"RESET TMsgPicker",closeConfirmation?:string|null}` | **仅 Debug 注册**。阻止新任务，沿用 Pending 发送保护，全部 close / Closed 后检查并清理固定 `%LOCALAPPDATA%/com.funare.tmsgpicker` 全部数据。成功退出，失败报错；不接受删除路径、不 logOut。Release 排除命令注册和实现 |
 
-`Settings = {schema_version:1,api_id,proxy_enabled,proxy_server,proxy_port,proxy_username,last_profile_id,left_ratio,right_ratio,card_compact}`。
+移除 IPC：`add_account`、`rename_account`、`remove_account`、`save_layout`、`save_ui_preferences`、`close_settings`。辅助窗口通过原生关闭按钮关闭；登录窗口先执行安全取消。
 
-`SettingsSnapshot = {settings,profiles,has_saved_api_hash,has_saved_proxy_password}`。
-Profile 字段为 `profile_id,telegram_user_id:string|null,display_name,username:string|null,session_directory_id,is_legacy_profile,created_at,last_used_at,has_saved_database_secret`。首次授权前 Telegram ID 为空；Ready 后 getMe 更新身份。重复身份不写入冲突 Profile，安全断开并提示显式移除；原账号不受影响。Session 标识由后端产生，任何业务命令都不接受 Client ID 或文件路径。
+`Settings = {schema_version:1,api_id,proxy_enabled,proxy_server,proxy_port,proxy_username}`。旧 `last_profile_id` 只用于升级读取；栏宽和 Compact 忽略且不再写出。
 
-秘密和配置优先级：全局设置／DPAPI 秘密优先，缺少 API 设置时使用环境变量。数据库口令手工输入优先于此 Profile 的保存值；只有初始化成功后按 remember_database 保存／清除副本。UI 取消记住会立即调用 clear_secret 清除副本。保存状态 IPC 不解密、不返回秘密。DPAPI 解密失败只影响对应账号的解锁，手工输入可覆盖失败的保存副本。验证码／2FA 不保存。
+`SettingsSnapshot = {settings,profiles,primary_profile_id,interrupted_profiles,debug_tools,has_saved_api_hash,has_saved_proxy_password}`。
+正式 profiles 的 Telegram User ID 必须非空；Profile 字段为 `profile_id,telegram_user_id,display_name,username,session_directory_id,is_legacy_profile,created_at,last_used_at,has_saved_database_secret,logout_pending`，名称和 username 始终根据最新 getMe 更新。已确认 logOut 会先持久化 logout_pending；重启后只进入注销清理恢复状态，不重建其 Client。待登录／升级未识别记录仅出现在 interrupted_profiles，供 LoginWindow 恢复，不进入普通账号列表。accounts.json 分离保存正式 profiles、primary_profile_id 和 pending_profiles。Session ID 由后端生成，业务命令不接受 Client ID 或文件路径。
+
+秘密和配置优先级：全局设置／DPAPI 秘密优先，缺少 API 时使用环境变量。原数据库口令手工输入优先于保存值；缺失时 Runtime 保持 NeedsDatabasePassphrase，账号设置输入原密码继续恢复原 Session，不使用空密钥或删除数据库。新口令仅在初始化、Ready、getMe、去重和登记的同一事务中按首次登录选择保存／清除；无正在运行的登录向导时，升级恢复保留原凭据。保存状态 IPC 不解密、不返回秘密。手机号、验证码、2FA 不保存。
 
 `TelegramGateway.request_batch` 在等待前按序提交所有请求，返回值保持提交顺序；先等待最后的参数请求，以便参数错误立即返回并清理其余 pending。TDLib 将初始化前的 addProxy/disableProxy 排队，因此不可用单条阻塞 request 先等待代理确认。代理请求成功仅表示设置被接受，不表示网络连接成功。
 
@@ -81,12 +83,13 @@ Profile 字段为 `profile_id,telegram_user_id:string|null,display_name,username
 
 | 事件 | 负载 / 行为 |
 |---|---|
-| `connection` | `{profile_id,generation,runtime_state,auth_state,connection_state,detail}`；不广播原始手机号／验证码／邮箱／密码提示 |
+| `connection` | `{profile_id,generation,runtime_state,auth_state,connection_state,detail,user_disconnected}`；不广播手机号／验证码／邮箱／密码。user_disconnected 仅在用户断开成功后设置，网络更新不改变它 |
 | `query-progress` | `{profile_id,generation,result:ScanResult}`；ScanResult 保持 `{run_id,status,scanned,pages,exact,detail,posts}`，status 为 Scanning／Partial／Complete／Cancelled／Error |
 | `forward-update` | `{profile_id,generation,target,old_message_id,state:"Sent"|"Failed"|"Unknown"}`；对应发送临时 ID |
 | `close-confirmation-required` | 仅发给 main，负载为 CloseChallenge；退出前 Pending 未确认，主窗口提示等待／确认，不自动关闭 |
 | `workspace-settings-changed` | `{source:"main"\|"settings"}`；前端发送不含秘密的刷新通知，另一窗口重新通过 app_settings 读取非敏感状态；不作为会话授权依据 |
-| `settings-focus-profile` | `string|null`；后端仅向 settings 窗口发送要显示的 Profile；相同账号仅聚焦，不清空输入 |
+| `login-completed` | Profile ID，仅发送 main；刷新注册表、选择新账号、加载聊天 |
+| `login-error` | 脱敏错误；保持 PendingLogin，以便重试或安全取消 |
 | `accounts-changed` | 无敏感负载；前端重新读取 app_settings，刷新 getMe 更新后的 Profile |
 | `account-notice` | `{profile_id,detail}`；重复 Telegram 身份或元数据保存失败的提示 |
 | `app-error` | 安全关闭失败时的短错误；保持进程，允许重试 |
@@ -111,10 +114,10 @@ Pending 临时消息 ID 按账号隔离，收到 Sent／Failed 后解除。断�
 
 配置／注册表／DPAPI 密文修改在私有暂存对象上完成，三个文件全部持久化成功后才提交内存。多文件替换使用回滚日志；失败恢复旧文件，启动前也先恢复未完成事务。恢复失败明确报错，拒绝继续写入；不静默重置配置。应用退出先拒绝新任务，全部提交 close 后并发等待 Closed；正常退出不调用 logOut。详情见 [Runtime 架构](RUNTIME_ARCHITECTURE.md)。
 
-## 多窗口生命周期（第二轮 UI）
+## 三类辅助窗口生命周期
 
-主窗口 label 为 `main`，独立设置窗口为 `settings`，URL 为本地 `index.html?view=settings`。Settings capability 仅为该窗口提供 core event 访问；窗口创建/关闭通过固定目标的 Rust 命令，不开放任意原始 TDLib 或解密秘密接口。Settings 默认 500 × 580，最小 420 × 440，可调整和内部滚动，重复创建由独立 mutex 串行，已有窗口解除最小化并聚焦。
+主窗口为 main；应用设置为 settings（view=settings）；账号设置为 account-<Profile ID>（view=account&profile=<ID>），创建后不可切换绑定；登录为唯一 login（view=login）。窗口 URL 由 Rust 固定生成，创建由 mutex 串行，重复点击解除最小化并聚焦。辅助窗口默认 500 × 580、最小 420 × 440，共享 theme.json 背景及 Windows 原生 DWM 样式。Settings capability 为这些本地窗口提供 core event 访问，不开放任意原生 TDLib 或秘密读取。
 
-`on_window_event` 的 CloseRequested 通过 `route_window_close` 只对 main 执行 prevent_close + begin_safe_exit；settings 关闭正常销毁该小窗，不调用 close_session，不修改 generation、查询或发送状态。main 关闭即使没有 Gateway，也退出整个应用，避免遗留 Settings。原有 RunEvent 安全退出与 Pending 发送保护保留。
+main CloseRequested 执行安全退出；设置窗口关闭正常销毁，不改变账号、查询或发送状态。LoginWindow CloseRequested 先阻止默认关闭，完成 cancel_pending_login 再 destroy；Destroyed 异常路径也尝试清理，失败广播错误，不退出整个应用。getMe 登记与取消由同一账号生命周期锁串行，已晋升正式账号不会被取消误删。主窗口安全退出关闭全部正式和 Pending Client，保留原有并发关闭、共享 Receiver 和 Pending 发送保护。
 
-`card_compact` 是 schema 1 的向后兼容普通字段，旧配置缺失时为 false；不自动重置账号、凭据或栏宽。Settings 保存 API/代理前重新读取最新普通配置，避免用打开窗口时的旧快照覆盖主窗口后来调整的布局或折叠偏好。
+三栏比例只保留在主窗口内存。拖动、方向键、Home 仍生效；不发送布局 IPC，不恢复旧比例，不跨窗口同步比例。旧 Compact 字段忽略，不再提供对应 UI 或持久化。

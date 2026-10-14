@@ -457,7 +457,22 @@ impl TelegramGateway for TdlibGateway {
         if cancel.load(Ordering::Relaxed) {
             return Err("Cancelled".into());
         }
-        self.enqueue(body)?.wait(cancel)
+        let logout = body["@type"] == "logOut";
+        let result = self.enqueue(body)?.wait(cancel);
+        // Only a definitive TDLib rejection allows returning to Accepting.
+        // Timeout/receiver failure may mean logout is in flight; never append close.
+        if logout
+            && result
+                .as_ref()
+                .is_err_and(|e| e.starts_with("TDLib error "))
+        {
+            let mut submission = self.submission.lock().unwrap_or_else(|e| e.into_inner());
+            if submission.phase == SubmissionPhase::Closing {
+                submission.phase = SubmissionPhase::Accepting;
+                submission.terminal_sent = false;
+            }
+        }
+        result
     }
     fn request_batch(&self, requests: Vec<Value>, cancel: &AtomicBool) -> Result<Vec<Value>> {
         let mut pending = Vec::new();

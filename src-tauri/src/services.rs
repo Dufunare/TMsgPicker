@@ -28,6 +28,41 @@ pub struct ConnectConfig {
     pub proxy: Option<ProxyConfig>,
 }
 pub struct AuthService;
+#[derive(Default)]
+pub struct LogoutProgress {
+    pub confirmed: bool,
+    pub closed: bool,
+    pub recorded: bool,
+}
+impl LogoutProgress {
+    /// Preserve progress for retries. No local cleanup before positive logout + Closed.
+    pub fn execute(
+        &mut self,
+        g: Option<&dyn SessionLifecycle>,
+        record_confirmation: impl FnOnce() -> Result<()>,
+        cleanup: impl FnOnce() -> Result<()>,
+    ) -> Result<()> {
+        if !self.confirmed {
+            let reply = g
+                .ok_or("Restore account before logout")?
+                .request(json!({"@type":"logOut"}), &AtomicBool::new(false))?;
+            if reply["@type"] != "ok" {
+                return Err("Telegram logout was not confirmed; registration retained".into());
+            }
+            self.confirmed = true;
+        }
+        if !self.recorded {
+            record_confirmation()?;
+            self.recorded = true;
+        }
+        if !self.closed {
+            g.ok_or("Client unavailable before confirmed Closed")?
+                .wait_closed()?;
+            self.closed = true;
+        }
+        cleanup()
+    }
+}
 impl AuthService {
     pub fn end_session(g: &dyn SessionLifecycle, logout: bool) -> Result<()> {
         if logout {

@@ -1,5 +1,56 @@
 # 应用配置与常驻多账号 Runtime
 
+## 当前账号生命周期（2026-10-14 交互重构）
+
+本节及 [IPC](IPC.md) 描述当前实现。后面的初版 Runtime / P2 部分保留为历史设计记录；其中提前注册账号、持久化布局／Compact、混合 Settings、改名／移除 Profile 等产品行为已由本节取代，共享 Receiver 和并发保护继续沿用。
+
+```text
+AccountRegistry
+  profiles              已完成 Ready + getMe 的正式账号
+  primary_profile_id    主账号关联，优先合法 ID；一次兼容旧 last_profile_id
+  pending_profiles      独立的中断／升级恢复元数据，不进入普通账号列表
+
+PendingLogin（login.rs 服务 + AppState 内存所有权）
+  profile_id            提前分配最终唯一 ID，不移动运行中的数据库
+  phone                 仅内存，实际 WaitPhoneNumber 时提交并清空
+  remember_database     首次登录的选择，成功登记时处理 DPAPI 副本
+  newly_created         取消时只有本次创建的目录可清理；恢复旧记录保留数据
+
+AccountRuntime
+  原有账号级 epoch / Client / 查询 / Pending 发送 / lifecycle Mutex
+  user_disconnected     用户主动 close 成功后设置，网络状态不能修改
+  logout_progress       本进程确认退出／Closed 进度，失败时重试不重复 logOut
+
+ActiveProfileId         当前窗口内的查看选择，不写配置、不影响任何 Client
+```
+
+ApplicationConfig 仅保存 API、SOCKS5 的应用级配置。旧 left_ratio、right_ratio、card_compact 被 serde 忽略；last_profile_id 只用于一次迁移读取、不再写出。主账号无效时按 created_at 选择最早登记账号（相同时间维持注册表顺序），注销主账号后自动回退；切换查看不改变主账号。旧未识别的 Profile／Legacy 移入 pending_profiles，保留目录和原凭据，getMe 成功前不显示占位卡片。
+
+启动创建所有正式账号 Client；待恢复记录也使用独立 Runtime。保存口令可并发初始化，无口令停在 NeedsDatabasePassphrase；必须输入原密码，不能生成替代密钥或清理原数据库。设置窗口关闭不调用生命周期 API。全局配置更新仍使用全局写锁、并发 close / Closed 和并发重建，主动断开账号保持断开。
+
+| 用户操作 | 当前流程 |
+|---|---|
+| 添加 | 唯一 LoginWindow → 校验全局 API → PendingLogin / 独立 Client / 最终目录 → 按真实授权状态推进 → Ready → getMe → 去重 → 原子提交身份、可选口令、正式登记 → main 选中新账号 → 关闭登录窗，Client 继续运行 |
+| 取消登录 | 全局读锁 + 账号生命周期锁 → close / Closed → 本次新建目录严格清理 → 删除 Pending 元数据；旧恢复记录仅关闭并保留原数据，不 logOut |
+| 重复身份 | 不晋升／不保存新口令，不修改既有账号；安全 close 冲突 Client，提示取消临时登录 |
+| 切换 | 只更新前端视图；select_profile 仅验证正式 ID，不写盘，不创建／关闭 Client |
+| 断开 | 原有 Pending 审阅保护 → 取消指定账号查询 → close / Closed → 标记主动断开；保留登记、Session、DPAPI 口令 |
+| 恢复 | 只恢复主动断开账号；复用其原 Session，缺口令时提示原密码。启动缺密码的账号直接继续数据库初始化，不增加“解锁”菜单 |
+| 注销 | UI 二次确认 + confirmed 校验 → 指定 Ready 账号 logOut → 明确 ok → Closed → 清理该账号私有数据 → 原子删除登记和口令 → 主账号回退；错误保留登记，已确认的退出进度可重试 |
+| Debug 全部重置 | Debug 编译限定 + 明确短语 → 禁止新任务 → Pending 等待／Unknown 审阅 → 全部 close / Closed → 固定应用专属目录的祖先／后代检查 → 删除全部本地状态 → 成功退出；不 logOut |
+
+注销使用 services::LogoutProgress，可用 Mock 验证正面响应、关闭超时、清理失败和重试顺序。明确 ok 后先持久化 Profile.logout_pending，再等待 Closed 和清理；重启发现此标志只进入 LogoutCleanupRequired，不重新打开原 Session，允许重试完成本地清理。全局重建也跳过已确认注销的账号。TDLib 明确拒绝 logOut 时提交门可恢复 Accepting；超时或接收故障仍保留终止状态，不盲目追加 close。注销清理失败提供重试，确认未得到时不能宣称注销成功。
+
+managed_data.rs 统一固定所有者清理：检查绝对路径、禁止 ParentDir、检查所有祖先及整棵目录树，不跟随符号链接／Windows Reparse Point，清理后检查残留。普通 delete_session 仍拒绝 Legacy；注销 Legacy 使用专用 cleanup_logged_out_session，仅删除 tdlib/db、tdlib/files，保护 tdlib/accounts。完整 Debug Reset 固定比对 LOCALAPPDATA/com.funare.tmsgpicker，不接受前端路径；开始删除后若失败，继续拒绝新账号任务／配置写入，只允许重试重置或安全退出。测试只在独立临时目录内创建合成数据库、Junction、凭据和缓存。
+
+Vue 职责分离为 AccountPanel、AccountSettings、ApplicationSettings、LoginWizard；useLogin 独立管理临时输入与授权状态，useApplicationSettings 只管理全局配置，useWorkspace / accountViews 保留账号视图和消息任务。账号设置以 account-<ID> 窗口固定绑定 Profile；主窗口切换不会重新定向，注销后关闭绑定窗或显示失效。
+
+Windows 原生标题栏和三个辅助窗口共用 src/theme.json。window_theme.rs 使用 COLORREF = R | G<<8 | B<<16，设置 DWM 35（caption）、34（无边框描画）、36（text），不支持时保持原生降级。未引入自绘标题栏。详见 [Microsoft DWM 枚举文档](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/ne-dwmapi-dwmwindowattribute)。
+
+验证范围与仍需人工验收的行为见 [当前交付记录](ACCOUNT_LIFECYCLE_ACCEPTANCE.md)。
+
+## 初版 Runtime 设计记录
+
 2026-10-14。替代此前“一个活动 Gateway、切换时关闭旧账号”的运行模型。开工分支 `review/stability-final-pass-20261013`，工作区干净；实现基于该本地分支，未拉取旧 main 覆盖，也未推送／合并。三栏布局、独立 Settings、Splitter、业务算法保持原实现。
 
 ## 模块和所有权

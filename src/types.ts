@@ -5,7 +5,7 @@ export interface Message { key: MessageKey; date: number; content_kind: string; 
 export interface Post { key: string; kind: 'single' | 'album'; members: Message[]; representative: MessageKey; date: number; text: string; metrics: Metrics; provenance: Record<string, string>; partial: boolean }
 export interface ScanResult { run_id: string; status: 'Scanning' | 'Partial' | 'Complete' | 'Cancelled' | 'Error'; scanned: number; pages: number; exact: boolean; detail: string; posts: Post[] }
 export interface Chat { id: string; title: string; kind: string }
-export interface Connection { profile_id: string | null; generation: number; runtime_state: string; auth_state: string; connection_state: string; detail: string }
+export interface Connection { profile_id: string | null; generation: number; runtime_state: string; auth_state: string; connection_state: string; detail: string; user_disconnected: boolean }
 export type FieldName = 'views' | 'forwards' | 'comments' | 'reply_info' | 'reaction_total' | 'reaction' | 'post_kind' | 'media_album_id' | 'content_kind' | 'date';
 export interface Field { kind: FieldName; emoji?: string }
 export type CompareOp = 'eq' | 'ne' | 'gt' | 'ge' | 'lt' | 'le';
@@ -15,6 +15,6 @@ export interface ActionItem { source: MessageKey; state: string; detail: string;
 export interface ForwardReport { items: ActionItem[] }
 export interface UnknownSend { profile_id: string; generation: number; target: string; old_message_id: string; state: string }
 export interface CloseChallenge { pending_count: number; retry_after_ms: number; token: string | null }
-export interface Settings { schema_version: number; api_id: number | null; proxy_enabled: boolean; proxy_server: string; proxy_port: number; proxy_username: string; last_profile_id: string | null; left_ratio: number; right_ratio: number; card_compact: boolean }
-export interface Profile { profile_id: string; telegram_user_id: string | null; display_name: string; username: string | null; is_legacy_profile: boolean; session_directory_id: string; created_at: number; last_used_at: number; has_saved_database_secret: boolean }
-export interface SettingsSnapshot { settings: Settings; profiles: Profile[]; has_saved_api_hash: boolean; has_saved_proxy_password: boolean }
+export interface Settings { schema_version: number; api_id: number | null; proxy_enabled: boolean; proxy_server: string; proxy_port: number; proxy_username: string }
+export interface Profile { profile_id: string; telegram_user_id: string | null; display_name: string; username: string | null; is_legacy_profile: boolean; session_directory_id: string; created_at: number; last_used_at: number; has_saved_database_secret: boolean; logout_pending: boolean }
+export interface SettingsSnapshot { settings: Settings; profiles: Profile[]; has_saved_api_hash: boolean; has_saved_proxy_password: boolean; primary_profile_id: string | null; interrupted_profiles: Profile[]; debug_tools: boolean }

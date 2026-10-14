@@ -1,7 +1,11 @@
 import { createApp } from 'vue';
 import App from './App.vue';
 import SettingsPage from './SettingsPage.vue';
+import LoginPage from './LoginPage.vue';
+import theme from './theme.json';
+import './base.css';
 import './workspace.css';
-const settingsView=new URLSearchParams(window.location.search).get('view')==='settings';
-if(settingsView)document.documentElement.classList.add('settings-view');
-createApp(settingsView?SettingsPage:App).mount('#app');
+document.documentElement.style.setProperty('--workspace-surface',`rgb(${theme.background.join(',')})`);
+const view=new URLSearchParams(window.location.search).get('view');
+if(view)document.documentElement.classList.add('settings-view');
+createApp(view==='login'?LoginPage:view==='settings'||view==='account'?SettingsPage:App).mount('#app');

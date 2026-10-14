@@ -44,6 +44,132 @@ fn normal_close_and_explicit_logout_have_distinct_lifecycles() {
         );
     }
 }
+struct LogoutMock {
+    reply: Mutex<Result<Value>>,
+    close_failures: Mutex<usize>,
+    calls: Mutex<Vec<&'static str>>,
+}
+impl TelegramGateway for LogoutMock {
+    fn request(&self, _: Value, _: &AtomicBool) -> Result<Value> {
+        self.calls.lock().unwrap().push("logOut");
+        self.reply.lock().unwrap().clone()
+    }
+    fn request_batch(&self, _: Vec<Value>, _: &AtomicBool) -> Result<Vec<Value>> {
+        unreachable!()
+    }
+}
+impl SessionLifecycle for LogoutMock {
+    fn begin_close(&self) {
+        panic!("logout must never append close");
+    }
+    fn wait_closed(&self) -> Result<()> {
+        self.calls.lock().unwrap().push("waitClosed");
+        let mut failures = self.close_failures.lock().unwrap();
+        if *failures > 0 {
+            *failures -= 1;
+            Err("synthetic close timeout".into())
+        } else {
+            Ok(())
+        }
+    }
+}
+#[test]
+fn logout_requires_positive_receipt_and_closed_before_cleanup_and_retries_without_relogout() {
+    use tmsgpicker_lib::{services::LogoutProgress, settings::Store};
+    let root = std::env::temp_dir().join(format!(
+        "tmsg-logout-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let mut store = Store::open(root.clone()).unwrap();
+    let a = store.add("A".into()).unwrap();
+    let b = store.add("B".into()).unwrap();
+    store.identify(&a, &json!({"id":1})).unwrap();
+    store.identify(&b, &json!({"id":2})).unwrap();
+    std::fs::create_dir_all(store.session_root(&a).unwrap().join("db")).unwrap();
+    std::fs::create_dir_all(store.session_root(&b).unwrap().join("db")).unwrap();
+    let g = LogoutMock {
+        reply: Mutex::new(Err("synthetic rejection".into())),
+        close_failures: Mutex::new(1),
+        calls: Mutex::new(Vec::new()),
+    };
+    let mut progress = LogoutProgress::default();
+    assert!(
+        progress
+            .execute(
+                Some(&g),
+                || Ok(()),
+                || panic!("rejection must retain account")
+            )
+            .is_err()
+    );
+    assert!(!progress.confirmed);
+    assert!(store.profile(&a).is_ok());
+    *g.reply.lock().unwrap() = Ok(json!({"@type":"unexpected"}));
+    assert!(
+        progress
+            .execute(
+                Some(&g),
+                || Ok(()),
+                || panic!("unconfirmed logout must retain account")
+            )
+            .is_err()
+    );
+    *g.reply.lock().unwrap() = Ok(json!({"@type":"ok"}));
+    assert!(
+        progress
+            .execute(
+                Some(&g),
+                || store.mark_logout_pending(&a),
+                || panic!("close timeout must retain account and data")
+            )
+            .is_err()
+    );
+    assert!(progress.confirmed);
+    assert!(!progress.closed);
+    assert!(
+        Store::open(root.clone())
+            .unwrap()
+            .profile(&a)
+            .unwrap()
+            .logout_pending
+    );
+    assert!(
+        progress
+            .execute(
+                Some(&g),
+                || Ok(()),
+                || Err("synthetic cleanup failure".into())
+            )
+            .is_err()
+    );
+    assert!(progress.closed);
+    assert!(store.profile(&a).is_ok());
+    assert!(store.session_root(&a).unwrap().exists());
+    progress
+        .execute(
+            None,
+            || Ok(()),
+            || {
+                store.cleanup_logged_out_session(&a)?;
+                store.remove(&a)
+            },
+        )
+        .unwrap();
+    assert!(store.profile(&a).is_err());
+    assert!(store.session_root(&b).unwrap().join("db").exists());
+    assert_eq!(
+        store.snapshot().primary_profile_id.as_deref(),
+        Some(b.as_str())
+    );
+    assert_eq!(
+        *g.calls.lock().unwrap(),
+        vec!["logOut", "logOut", "logOut", "waitClosed", "waitClosed"]
+    );
+    std::fs::remove_dir_all(root).unwrap();
+}
 impl MockTelegramGateway {
     fn pages(pages: Vec<Value>) -> Self {
         Self {
