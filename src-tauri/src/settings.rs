@@ -8,7 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ApplicationConfig {
     pub schema_version: u32,
@@ -38,7 +38,7 @@ impl Default for ApplicationConfig {
         }
     }
 }
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct AccountProfile {
     pub profile_id: String,
     pub telegram_user_id: Option<String>,
@@ -73,7 +73,7 @@ pub struct ProfileView {
     pub profile: Profile,
     pub has_saved_database_secret: bool,
 }
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ApplicationConfigService {
     value: ApplicationConfig,
 }
@@ -103,12 +103,12 @@ impl ApplicationConfigService {
         self.value.last_profile_id = id;
     }
 }
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AccountRegistry {
     profiles: Vec<AccountProfile>,
     legacy_imported: bool,
 }
-#[derive(Default, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct AccountCredentialStore {
     secrets: BTreeMap<String, Vec<u8>>,
 }
@@ -124,6 +124,8 @@ pub struct Store {
     config: ApplicationConfigService,
     registry: AccountRegistry,
     credentials: AccountCredentialStore,
+    #[cfg(test)]
+    fail_save_at: Option<usize>,
 }
 pub fn now() -> u64 {
     SystemTime::now()
@@ -131,9 +133,68 @@ pub fn now() -> u64 {
         .unwrap_or_default()
         .as_secs()
 }
+const STORAGE_FILES: [&str; 3] = ["credential-store.json", "accounts.json", "app-config.json"];
+const STORAGE_JOURNAL: &str = "storage-transaction.json";
+#[derive(Serialize, Deserialize)]
+struct StorageJournal {
+    previous: Vec<Option<Vec<u8>>>,
+}
+fn write_flushed(path: &Path, bytes: &[u8]) -> Result<()> {
+    let mut f = fs::File::create(path).map_err(|_| "Cannot write storage")?;
+    f.write_all(bytes)
+        .and_then(|_| f.sync_all())
+        .map_err(|_| "Cannot flush storage".into())
+}
+fn atomic_bytes(root: &Path, name: &str, bytes: &[u8]) -> Result<()> {
+    let temp = root.join(format!("{name}.tmp"));
+    write_flushed(&temp, bytes)?;
+    replace(&temp, &root.join(name))
+}
+fn recover_storage(root: &Path) -> Result<()> {
+    let path = root.join(STORAGE_JOURNAL);
+    if !path.exists() {
+        return Ok(());
+    }
+    let journal: StorageJournal = serde_json::from_slice(
+        &fs::read(&path).map_err(|_| "Cannot read storage recovery journal")?,
+    )
+    .map_err(|_| "Storage recovery journal damaged; restore a valid backup")?;
+    if journal.previous.len() != STORAGE_FILES.len() {
+        return Err("Invalid storage recovery journal".into());
+    }
+    // Validate every old document before changing anything. No paths come from JSON.
+    for (index, old) in journal.previous.iter().enumerate() {
+        if let Some(bytes) = old {
+            let valid = match index {
+                0 => serde_json::from_slice::<AccountCredentialStore>(bytes).is_ok(),
+                1 => serde_json::from_slice::<AccountRegistry>(bytes).is_ok(),
+                _ => serde_json::from_slice::<ApplicationConfig>(bytes).is_ok(),
+            };
+            if !valid {
+                return Err("Invalid previous storage in recovery journal".into());
+            }
+        }
+    }
+    for (name, old) in STORAGE_FILES.into_iter().zip(journal.previous) {
+        let target = root.join(name);
+        match old {
+            Some(bytes) => {
+                if fs::read(&target).ok().as_deref() != Some(bytes.as_slice()) {
+                    atomic_bytes(root, name, &bytes)?;
+                }
+            }
+            None if target.exists() => {
+                fs::remove_file(target).map_err(|_| "Cannot restore absent storage file")?
+            }
+            None => {}
+        }
+    }
+    fs::remove_file(path).map_err(|_| "Cannot finish storage recovery".into())
+}
 impl Store {
     pub fn open(root: PathBuf) -> Result<Self> {
         fs::create_dir_all(&root).map_err(|_| "Cannot create settings directory")?;
+        recover_storage(&root)?;
         let path = root.join("settings.json");
         let disk: Disk = if !root.join("app-config.json").exists() && path.exists() {
             serde_json::from_slice(&fs::read(path).map_err(|_| "Cannot read settings")?)
@@ -158,11 +219,15 @@ impl Store {
                 registry: read(root.join("accounts.json"))?,
                 credentials: read(root.join("credential-store.json"))?,
                 root,
+                #[cfg(test)]
+                fail_save_at: None,
             }
         } else {
             // Keep the original settings.json as a non-destructive migration backup.
             Self {
                 root,
+                #[cfg(test)]
+                fail_save_at: None,
                 config: ApplicationConfigService {
                     value: disk.settings,
                 },
@@ -212,20 +277,85 @@ impl Store {
         Ok(s)
     }
     fn save(&self) -> Result<()> {
-        fn write(root: &Path, name: &str, value: &impl Serialize) -> Result<()> {
-            let path = root.join(name);
-            let temp = root.join(format!("{name}.tmp"));
-            let bytes = serde_json::to_vec_pretty(value).map_err(|_| "Cannot serialize storage")?;
-            let mut f = fs::File::create(&temp).map_err(|_| "Cannot write storage")?;
-            f.write_all(&bytes)
-                .and_then(|_| f.sync_all())
-                .map_err(|_| "Cannot flush storage")?;
-            drop(f);
-            replace(&temp, &path)
+        let values = [
+            serde_json::to_vec_pretty(&self.credentials),
+            serde_json::to_vec_pretty(&self.registry),
+            serde_json::to_vec_pretty(&self.config.value),
+        ];
+        let mut previous = Vec::new();
+        for name in STORAGE_FILES {
+            let path = self.root.join(name);
+            previous.push(if path.exists() {
+                Some(fs::read(path).map_err(|_| "Cannot read previous storage")?)
+            } else {
+                None
+            });
         }
-        write(&self.root, "credential-store.json", &self.credentials)?;
-        write(&self.root, "accounts.json", &self.registry)?;
-        write(&self.root, "app-config.json", &self.config.value)
+        // Stage all data before touching committed files. Journal contains old DPAPI
+        // ciphertext, never decrypted secrets, and only the three fixed storage files.
+        let mut staged = Vec::new();
+        for (index, value) in values.into_iter().enumerate() {
+            self.check_save_fault(index)?;
+            let bytes = value.map_err(|_| "Cannot serialize storage")?;
+            let temp = self.root.join(format!("{}.tmp", STORAGE_FILES[index]));
+            write_flushed(&temp, &bytes)?;
+            staged.push(temp);
+        }
+        let journal = StorageJournal { previous };
+        atomic_bytes(
+            &self.root,
+            STORAGE_JOURNAL,
+            &serde_json::to_vec(&journal).map_err(|_| "Cannot serialize recovery journal")?,
+        )?;
+        let outcome = (|| {
+            for (index, temp) in staged.iter().enumerate() {
+                self.check_save_fault(index + 3)?;
+                replace(temp, &self.root.join(STORAGE_FILES[index]))?;
+            }
+            self.check_save_fault(6)?;
+            // This is the commit point; before it startup rolls back the whole group.
+            fs::remove_file(self.root.join(STORAGE_JOURNAL))
+                .map_err(|_| "Cannot commit storage transaction")?;
+            Ok(())
+        })();
+        if let Err(error) = outcome {
+            if recover_storage(&self.root).is_err() {
+                return Err(format!(
+                    "{error}; storage recovery required before further writes"
+                ));
+            }
+            return Err(error);
+        }
+        Ok(())
+    }
+    fn check_save_fault(&self, index: usize) -> Result<()> {
+        #[cfg(test)]
+        if self.fail_save_at == Some(index) {
+            return Err("Injected storage write failure".into());
+        }
+        let _ = index;
+        Ok(())
+    }
+    fn transaction<T>(&mut self, edit: impl FnOnce(&mut Self) -> Result<T>) -> Result<T> {
+        recover_storage(&self.root)?;
+        let mut draft = Self {
+            root: self.root.clone(),
+            config: self.config.clone(),
+            registry: self.registry.clone(),
+            credentials: self.credentials.clone(),
+            #[cfg(test)]
+            fail_save_at: self.fail_save_at,
+        };
+        let result = edit(&mut draft)?;
+        if draft.config != self.config
+            || draft.registry != self.registry
+            || draft.credentials != self.credentials
+        {
+            draft.save()?;
+            // Publish memory only after all three files commit successfully.
+            *self = draft;
+        }
+        Ok(result)
     }
     pub fn profile_ids(&self) -> Vec<String> {
         self.registry
@@ -274,9 +404,11 @@ impl Store {
         ApplicationConfigService::validate(settings)
     }
     pub fn set_settings(&mut self, settings: Settings) -> Result<()> {
-        Self::validate_settings(&settings)?;
-        self.config.replace(settings)?;
-        self.save()
+        self.transaction(|draft| {
+            Self::validate_settings(&settings)?;
+            draft.config.replace(settings)?;
+            Ok(())
+        })
     }
     pub fn edit_application_config(
         &mut self,
@@ -284,19 +416,21 @@ impl Store {
         api: Option<String>,
         proxy: Option<String>,
     ) -> Result<()> {
-        Self::validate_settings(&settings)?;
-        let mut secrets = self.credentials.secrets.clone();
-        for (key, value) in [("api", api), ("proxy", proxy)] {
-            if let Some(value) = value {
-                if value.is_empty() {
-                    return Err("Credential cannot be empty".into());
+        self.transaction(|draft| {
+            Self::validate_settings(&settings)?;
+            let mut secrets = draft.credentials.secrets.clone();
+            for (key, value) in [("api", api), ("proxy", proxy)] {
+                if let Some(value) = value {
+                    if value.is_empty() {
+                        return Err("Credential cannot be empty".into());
+                    }
+                    secrets.insert(key.into(), protect(value.as_bytes(), true)?);
                 }
-                secrets.insert(key.into(), protect(value.as_bytes(), true)?);
             }
-        }
-        self.credentials.secrets = secrets;
-        self.config.replace(settings)?;
-        self.save()
+            draft.credentials.secrets = secrets;
+            draft.config.replace(settings)?;
+            Ok(())
+        })
     }
     pub fn set_card_compact(&mut self, compact: bool) -> Result<()> {
         let mut settings = self.settings();
@@ -304,8 +438,10 @@ impl Store {
         self.set_settings(settings)
     }
     pub fn reset(&mut self) -> Result<()> {
-        self.config.replace(Settings::default())?;
-        self.save()
+        self.transaction(|draft| {
+            draft.config.replace(Settings::default())?;
+            Ok(())
+        })
     }
     pub fn profile(&self, id: &str) -> Result<&Profile> {
         self.registry
@@ -336,99 +472,108 @@ impl Store {
             .join(&p.session_directory_id))
     }
     pub fn add(&mut self, name: String) -> Result<String> {
-        if name.trim().is_empty() || name.len() > 200 {
-            return Err("Invalid account name".into());
-        }
-        let id = format!(
-            "p-{:x}",
-            SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos()
-        );
-        if self.registry.profiles.iter().any(|p| p.profile_id == id)
-            || self.root.join("tdlib/accounts").join(&id).exists()
-        {
-            return Err("Account directory already exists; retry creating account".into());
-        }
-        self.registry.profiles.push(Profile {
-            profile_id: id.clone(),
-            telegram_user_id: None,
-            display_name: name,
-            username: None,
-            is_legacy_profile: false,
-            last_used_at: 0,
-            session_directory_id: id.clone(),
-            created_at: now(),
-        });
-        self.save()?;
-        Ok(id)
+        self.transaction(|draft| {
+            if name.trim().is_empty() || name.len() > 200 {
+                return Err("Invalid account name".into());
+            }
+            let id = format!(
+                "p-{:x}",
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_nanos()
+            );
+            if draft.registry.profiles.iter().any(|p| p.profile_id == id)
+                || draft.root.join("tdlib/accounts").join(&id).exists()
+            {
+                return Err("Account directory already exists; retry creating account".into());
+            }
+            draft.registry.profiles.push(Profile {
+                profile_id: id.clone(),
+                telegram_user_id: None,
+                display_name: name,
+                username: None,
+                is_legacy_profile: false,
+                last_used_at: 0,
+                session_directory_id: id.clone(),
+                created_at: now(),
+            });
+            Ok(id)
+        })
     }
     pub fn rename(&mut self, id: &str, name: String) -> Result<()> {
-        if name.trim().is_empty() || name.len() > 200 {
-            return Err("Invalid account name".into());
-        }
-        self.profile(id)?;
-        self.registry
-            .profiles
-            .iter_mut()
-            .find(|p| p.profile_id == id)
-            .unwrap()
-            .display_name = name;
-        self.save()
+        self.transaction(|draft| {
+            if name.trim().is_empty() || name.len() > 200 {
+                return Err("Invalid account name".into());
+            }
+            draft.profile(id)?;
+            draft
+                .registry
+                .profiles
+                .iter_mut()
+                .find(|p| p.profile_id == id)
+                .unwrap()
+                .display_name = name;
+            Ok(())
+        })
     }
     pub fn select(&mut self, id: &str) -> Result<()> {
-        self.profile(id)?;
-        self.config.select(Some(id.into()));
-        self.save()
+        self.transaction(|draft| {
+            draft.profile(id)?;
+            draft.config.select(Some(id.into()));
+            Ok(())
+        })
     }
     pub fn identify(&mut self, id: &str, user: &serde_json::Value) -> Result<bool> {
-        let uid = user["id"]
-            .as_i64()
-            .ok_or("Invalid Telegram identity")?
-            .to_string();
-        let duplicate = self
-            .registry
-            .profiles
-            .iter()
-            .any(|p| p.profile_id != id && p.telegram_user_id.as_ref() == Some(&uid));
-        self.profile(id)?;
-        if duplicate {
-            return Ok(true);
-        }
-        let p = self
-            .registry
-            .profiles
-            .iter_mut()
-            .find(|p| p.profile_id == id)
-            .unwrap();
-        if p.telegram_user_id.is_none()
-            && (p.display_name == "新账号" || p.display_name == "已有账号 (Legacy)")
-        {
-            p.display_name = format!(
-                "{} {}",
-                user["first_name"].as_str().unwrap_or(""),
-                user["last_name"].as_str().unwrap_or("")
-            )
-            .trim()
-            .into();
-        }
-        p.telegram_user_id = Some(uid);
-        p.username = user["usernames"]["editable_username"]
-            .as_str()
-            .map(str::to_owned);
-        p.last_used_at = now();
-        self.save()?;
-        Ok(duplicate)
+        self.transaction(|draft| {
+            let uid = user["id"]
+                .as_i64()
+                .ok_or("Invalid Telegram identity")?
+                .to_string();
+            let duplicate = draft
+                .registry
+                .profiles
+                .iter()
+                .any(|p| p.profile_id != id && p.telegram_user_id.as_ref() == Some(&uid));
+            draft.profile(id)?;
+            if duplicate {
+                return Ok(true);
+            }
+            let p = draft
+                .registry
+                .profiles
+                .iter_mut()
+                .find(|p| p.profile_id == id)
+                .unwrap();
+            if p.telegram_user_id.is_none()
+                && (p.display_name == "新账号" || p.display_name == "已有账号 (Legacy)")
+            {
+                p.display_name = format!(
+                    "{} {}",
+                    user["first_name"].as_str().unwrap_or(""),
+                    user["last_name"].as_str().unwrap_or("")
+                )
+                .trim()
+                .into();
+            }
+            p.telegram_user_id = Some(uid);
+            p.username = user["usernames"]["editable_username"]
+                .as_str()
+                .map(str::to_owned);
+            p.last_used_at = now();
+            Ok(duplicate)
+        })
     }
     pub fn remove(&mut self, id: &str) -> Result<()> {
-        self.profile(id)?;
-        self.registry.profiles.retain(|p| p.profile_id != id);
-        self.credentials.secrets.remove(&format!("db:{id}"));
-        if self.config.value.last_profile_id.as_deref() == Some(id) {
-            self.config.select(None);
-        }
-        self.save()
+        self.transaction(|draft| {
+            draft.profile(id)?;
+            draft.registry.profiles.retain(|p| p.profile_id != id);
+            draft.credentials.secrets.remove(&format!("db:{id}"));
+            if draft.config.value.last_profile_id.as_deref() == Some(id) {
+                draft.config.select(None);
+            }
+            Ok(())
+        })
     }
     pub fn delete_session(&self, id: &str) -> Result<()> {
         if self.profile(id)?.is_legacy_profile {
@@ -503,20 +648,37 @@ impl Store {
             .transpose()
     }
     pub fn set_secret(&mut self, key: &str, value: Option<String>) -> Result<()> {
-        if key != "api" && key != "proxy" {
-            self.profile(key.strip_prefix("db:").ok_or("Invalid credential key")?)?;
-        }
-        if let Some(v) = value {
-            if v.is_empty() {
-                return Err("Credential cannot be empty".into());
+        self.transaction(|draft| {
+            if key != "api" && key != "proxy" {
+                draft.profile(key.strip_prefix("db:").ok_or("Invalid credential key")?)?;
             }
-            self.credentials
-                .secrets
-                .insert(key.into(), protect(v.as_bytes(), true)?);
-        } else {
-            self.credentials.secrets.remove(key);
-        }
-        self.save()
+            if let Some(v) = value {
+                if v.is_empty() {
+                    return Err("Credential cannot be empty".into());
+                }
+                draft
+                    .credentials
+                    .secrets
+                    .insert(key.into(), protect(v.as_bytes(), true)?);
+            } else {
+                draft.credentials.secrets.remove(key);
+            }
+            Ok(())
+        })
+    }
+    pub fn clear_credential(&mut self, key: &str) -> Result<()> {
+        self.transaction(|draft| {
+            if key != "api" && key != "proxy" {
+                draft.profile(key.strip_prefix("db:").ok_or("Invalid credential key")?)?;
+            }
+            draft.credentials.secrets.remove(key);
+            if key == "proxy" {
+                let mut settings = draft.settings();
+                settings.proxy_username.clear();
+                draft.config.replace(settings)?;
+            }
+            Ok(())
+        })
     }
 }
 #[cfg(windows)]
@@ -620,6 +782,133 @@ fn replace(from: &Path, to: &Path) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn storage_bytes(root: &Path) -> Vec<Vec<u8>> {
+        STORAGE_FILES
+            .iter()
+            .map(|name| fs::read(root.join(name)).unwrap())
+            .collect()
+    }
+    #[test]
+    fn staged_writes_partial_replacements_and_commit_failure_preserve_memory_and_disk() {
+        let root = temp_root();
+        let mut s = Store::open(root.clone()).unwrap();
+        let id = s.add("Original".into()).unwrap();
+        let original = storage_bytes(&root);
+        let snapshot = serde_json::to_vec(&s.snapshot()).unwrap();
+        for failure in 0..=6 {
+            s.fail_save_at = Some(failure);
+            let mut config = s.settings();
+            config.api_id = Some(777);
+            assert!(s.set_settings(config).is_err());
+            assert_eq!(serde_json::to_vec(&s.snapshot()).unwrap(), snapshot);
+            assert_eq!(storage_bytes(&root), original, "failure {failure}");
+            assert!(!root.join(STORAGE_JOURNAL).exists());
+        }
+        s.fail_save_at = Some(4);
+        assert!(s.rename(&id, "Changed".into()).is_err());
+        assert!(s.add("Uncommitted".into()).is_err());
+        assert!(
+            s.identify(&id, &serde_json::json!({"id":12,"first_name":"Changed"}))
+                .is_err()
+        );
+        assert!(s.remove(&id).is_err());
+        #[cfg(windows)]
+        assert!(
+            s.set_secret("api", Some("synthetic-uncommitted-secret".into()))
+                .is_err()
+        );
+        assert_eq!(serde_json::to_vec(&s.snapshot()).unwrap(), snapshot);
+        assert_eq!(storage_bytes(&root), original);
+        let reopened = Store::open(root.clone()).unwrap();
+        assert_eq!(serde_json::to_vec(&reopened.snapshot()).unwrap(), snapshot);
+        s.fail_save_at = None;
+        s.rename(&id, "Committed".into()).unwrap();
+        assert_eq!(
+            Store::open(root.clone())
+                .unwrap()
+                .profile(&id)
+                .unwrap()
+                .display_name,
+            "Committed"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn interrupted_group_commit_is_rolled_back_before_loading_profiles() {
+        let root = temp_root();
+        let mut s = Store::open(root.clone()).unwrap();
+        let id = s.add("Original".into()).unwrap();
+        let old = storage_bytes(&root);
+        let journal = StorageJournal {
+            previous: old.iter().cloned().map(Some).collect(),
+        };
+        atomic_bytes(
+            &root,
+            STORAGE_JOURNAL,
+            &serde_json::to_vec(&journal).unwrap(),
+        )
+        .unwrap();
+        fs::write(
+            root.join("accounts.json"),
+            br#"{"profiles":[],"legacy_imported":true}"#,
+        )
+        .unwrap();
+        let mut config = s.settings();
+        config.api_id = Some(777);
+        fs::write(
+            root.join("app-config.json"),
+            serde_json::to_vec(&config).unwrap(),
+        )
+        .unwrap();
+        let reopened = Store::open(root.clone()).unwrap();
+        assert!(reopened.profile(&id).is_ok());
+        assert_eq!(reopened.settings().api_id, None);
+        assert_eq!(storage_bytes(&root), old);
+        assert!(!root.join(STORAGE_JOURNAL).exists());
+        fs::write(root.join(STORAGE_JOURNAL), b"{damaged").unwrap();
+        assert!(Store::open(root.clone()).is_err());
+        assert_eq!(storage_bytes(&root), old);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
+    fn actual_staging_io_failure_keeps_committed_config() {
+        let root = temp_root();
+        let mut s = Store::open(root.clone()).unwrap();
+        let old = storage_bytes(&root);
+        fs::create_dir(root.join("accounts.json.tmp")).unwrap();
+        let mut changed = s.settings();
+        changed.api_id = Some(777);
+        assert!(s.set_settings(changed).is_err());
+        assert_eq!(s.settings().api_id, None);
+        assert_eq!(storage_bytes(&root), old);
+        assert!(!root.join(STORAGE_JOURNAL).exists());
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[cfg(windows)]
+    #[test]
+    fn proxy_credential_and_username_clear_commit_as_one_operation() {
+        let root = temp_root();
+        let mut s = Store::open(root.clone()).unwrap();
+        let mut config = s.settings();
+        config.proxy_username = "known-user".into();
+        s.edit_application_config(config, None, Some("synthetic-proxy-secret".into()))
+            .unwrap();
+        let old = storage_bytes(&root);
+        s.fail_save_at = Some(5);
+        assert!(s.clear_credential("proxy").is_err());
+        assert_eq!(s.settings().proxy_username, "known-user");
+        assert_eq!(
+            s.secret("proxy").unwrap().as_deref(),
+            Some("synthetic-proxy-secret")
+        );
+        assert_eq!(storage_bytes(&root), old);
+        s.fail_save_at = None;
+        s.clear_credential("proxy").unwrap();
+        let reopened = Store::open(root.clone()).unwrap();
+        assert!(reopened.settings().proxy_username.is_empty());
+        assert!(!reopened.has("proxy"));
+        fs::remove_dir_all(root).unwrap();
+    }
     fn temp_root() -> PathBuf {
         std::env::temp_dir().join(format!(
             "tmsgpicker-test-{}",

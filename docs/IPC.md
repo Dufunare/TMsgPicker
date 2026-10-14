@@ -13,7 +13,10 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 | `select_profile` | `{profileId}` | 只保存上次查看的 Profile；不创建、初始化、关闭或注销 Client |
 | `connect` | `{config:{profile_id,passphrase:string|null,remember_database:boolean}}` | 解锁指定账号的未初始化 Client；如已 Closed 则重建此 Client；不影响其他 Profile。所有 Client 共用后端全局配置 |
 | `auth_submit` | `{profileId,value}` | 按指定账号实际授权状态提交手机号／代码／密码／邮箱 |
-| `disconnect` | `{profileId}` | 只取消此账号查询、close 并等 Closed；不注销、不删除目录 |
+| `disconnect` | `{profileId,closeConfirmation?:string|null}` | 只取消此账号查询、close 并等 Closed；超时 Pending 需提交经用户确认的令牌；不注销、不删除目录 |
+| `close_guard` | `{profileId:string|null}` | `{pending_count,retry_after_ms,token:string|null}`；null Profile 表示全部账号，检查 Pending 并生成确认挑战，不关闭 Client |
+| `unknown_sends` | 无 | `UnknownSend[]`，本进程内各账号经确认关闭的未确认发送记录 |
+| `exit_application` | `{closeConfirmation?:string|null}` | 安全关闭全部账号后退出；仍有 Pending 时向主窗口请求确认，关闭失败保留进程 |
 | `chats` | `{profileId,search}` | `Chat[]`；空字符串加载列表，非空搜索已知聊天 |
 | `public_chat` | `{profileId,username}` | 公开 Chat，支持 @ 前缀 |
 | `saved_messages` | `{profileId}` | 此账号 getMe + createPrivateChat 解析出的 Chat |
@@ -31,10 +34,10 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 | `close_settings` | 无 | 仅关闭 settings，不触发会话关闭 |
 | `save_ui_preferences` | `{cardCompact:boolean}` | 仅保存折叠偏好，保留 API、Profile、秘密与布局 |
 | `app_settings` | 无 | `SettingsSnapshot`，仅非敏感字段及 has_saved_* |
-| `save_settings` | `{edit:{settings,api_hash:string|null,proxy_password:string|null}}` | Snapshot；秘密 null 保持；安全关闭全部 Client 后统一保存并并发重建。保留最新布局／折叠／上次查看偏好。各账号失败通过 connection 事件报告 |
+| `save_settings` | `{edit:{settings,api_hash:string|null,proxy_password:string|null},closeConfirmation?:string|null}` | Snapshot；秘密 null 保持；安全关闭全部 Client 后统一保存并并发重建。保留最新布局／折叠／上次查看偏好。各账号失败通过 connection 事件报告 |
 | `save_layout` | `{left:number,right:number}` | 保存列宽比例，连接期间允许 |
-| `reset_settings` | 无 | Snapshot；安全关闭／重建全部账号，仅重置普通配置，保留凭据／Profile／Session |
-| `clear_secret` | `{key:"api"\|"proxy"\|"db:<profile_id>"}` | Snapshot；全局秘密清除会安全重建全部 Client，proxy 同时清空用户名；清除 db 只取消对应保存副本，当前解锁会话不关闭 |
+| `reset_settings` | `{closeConfirmation?:string|null}` | Snapshot；安全关闭／重建全部账号，仅重置普通配置，保留凭据／Profile／Session |
+| `clear_secret` | `{key:"api"\|"proxy"\|"db:<profile_id>",closeConfirmation?:string|null}` | Snapshot；全局秘密清除会安全重建全部 Client，proxy 同一持久化事务清空密码与用户名；清除 db 只取消对应保存副本，当前解锁会话不关闭 |
 | `add_account` | `{name}` | 内部 Profile ID；持久化独立 Profile，创建等待数据库口令的 Client；不接受前端目录 |
 | `rename_account` | `{profileId,name}` | Snapshot，本地别名 |
 | `remove_account` | `{profileId,confirmed,deleteData,deleteConfirmed}` | Snapshot；先安全关闭指定账号，默认保留 Session；删除数据要求二次确认和路径归属检查，禁止删除 Legacy |
@@ -80,7 +83,8 @@ Profile 字段为 `profile_id,telegram_user_id:string|null,display_name,username
 |---|---|
 | `connection` | `{profile_id,generation,runtime_state,auth_state,connection_state,detail}`；不广播原始手机号／验证码／邮箱／密码提示 |
 | `query-progress` | `{profile_id,generation,result:ScanResult}`；ScanResult 保持 `{run_id,status,scanned,pages,exact,detail,posts}`，status 为 Scanning／Partial／Complete／Cancelled／Error |
-| `forward-update` | `{profile_id,generation,target,old_message_id,state:"Sent"|"Failed"}`；对应发送临时 ID |
+| `forward-update` | `{profile_id,generation,target,old_message_id,state:"Sent"|"Failed"|"Unknown"}`；对应发送临时 ID |
+| `close-confirmation-required` | 仅发给 main，负载为 CloseChallenge；退出前 Pending 未确认，主窗口提示等待／确认，不自动关闭 |
 | `workspace-settings-changed` | `{source:"main"\|"settings"}`；前端发送不含秘密的刷新通知，另一窗口重新通过 app_settings 读取非敏感状态；不作为会话授权依据 |
 | `settings-focus-profile` | `string|null`；后端仅向 settings 窗口发送要显示的 Profile；相同账号仅聚焦，不清空输入 |
 | `accounts-changed` | 无敏感负载；前端重新读取 app_settings，刷新 getMe 更新后的 Profile |
@@ -93,7 +97,7 @@ Profile 字段为 `profile_id,telegram_user_id:string|null,display_name,username
 
 ReactionKey 序列化为 `{kind:"emoji"|"custom_emoji"|"paid"|"unknown",value?}`。所有非 Unicode 反应保留类型和计数。反应对象缺失为 null，已知为空为 `[]`。reaction_total 汇总同一个指标来源内的 reaction 计数，绝不跨 Album 成员累加。
 
-`ForwardReport = {items:[{source:{chat_id,message_id},state,detail,sent_id}]}`。预检为 Allowed/Rejected；执行为 Rejected/Failed/Pending/Sent。Pending 不代表送达，forward-update 按 Profile ID、generation、target、临时 sent_id 匹配；进程不持久化动作记录。
+`ForwardReport = {items:[{source:{chat_id,message_id},state,detail,sent_id}]}`。预检为 Allowed/Rejected；执行为 Rejected/Failed/Pending/Sent，用户确认关闭后可更新为 Unknown。Pending 和 Unknown 均不代表送达或失败。`UnknownSend = {profile_id,generation,target,old_message_id,state:"Unknown"}`。Unknown 历史独立于查询结果，按 Profile、generation、目标及临时 ID 隔离，断开／重建后仍可查看；同一旧 Client 的明确回执可更新它，新 Client 重用临时 ID 不覆盖它。记录仅保留本进程，退出后不持久化、不自动重发。
 
 ## 会话并发约束
 
@@ -101,7 +105,11 @@ AppState 持全局生命周期 RwLock，普通业务持读锁，各账号独立 
 
 整个进程只有一个 SharedReceiver。先验证 @client_id 对应存活 ClientSlot，再通过专属 Router 的 @extra 匹配 Pending；两级键等价于 (client_id, request_tag)。Closed 只清理该 Client 的 Pending，全部 Client Closed 后才停止并 join 共享接收线程。重建获得新 Client ID／generation，旧 Client 消息和旧 generation 回调安全丢弃。
 
-Pending 临时消息 ID 按账号隔离，收到 Sent／Failed 后解除；指定账号有 Pending 时拒绝其断开／移除／注销，全局设置和退出须等待全部 Pending。切换视图始终允许，不调用生命周期 IPC。应用退出先拒绝新任务，全部提交 close 后并发等待 Closed；正常退出不调用 logOut。详情见 [Runtime 架构](RUNTIME_ARCHITECTURE.md)。
+Pending 临时消息 ID 按账号隔离，收到 Sent／Failed 后解除。断开、全局设置和退出先调用 close_guard：没有 Pending 无需令牌；有 Pending 时，必须每项等待至少 30 秒，随后由用户明确确认，将尚无回执的发送标为 Unknown，再执行 close。令牌绑定所审阅的 Profile、generation 和临时消息集合，单次使用、5 分钟有效；期间新增 Pending、Runtime 重建或仍在提交转发均拒绝覆盖。取消确认不改变 Client、配置或输入框。移除／注销仍须等待 Pending 最终回执，不能借注销解除阻塞。切换视图始终允许，不调用生命周期 IPC。
+
+请求提交与 close／logOut 共用每个 Client 的提交锁。在发送终止请求前进入 Closing，拒绝后续业务请求，重复 close 不重复发送，logOut 后不盲目追加 close。共享接收器异常退出立即使所有 Router 的 Pending 失败、通知各 Profile Error；不伪造 Closed。重试断开只重启同一旧 Client Map 的接收器以观察真实 Closed，旧 Router 保持封闭，全部旧 Client 安全关闭后才能新建 Client。整个过程仍只有一个 receive loop。
+
+配置／注册表／DPAPI 密文修改在私有暂存对象上完成，三个文件全部持久化成功后才提交内存。多文件替换使用回滚日志；失败恢复旧文件，启动前也先恢复未完成事务。恢复失败明确报错，拒绝继续写入；不静默重置配置。应用退出先拒绝新任务，全部提交 close 后并发等待 Closed；正常退出不调用 logOut。详情见 [Runtime 架构](RUNTIME_ARCHITECTURE.md)。
 
 ## 多窗口生命周期（第二轮 UI）
 

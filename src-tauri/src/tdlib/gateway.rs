@@ -4,6 +4,7 @@ use serde_json::{Value, json};
 use std::{
     collections::HashMap,
     ffi::{CStr, CString},
+    panic::{AssertUnwindSafe, catch_unwind},
     sync::{
         Arc, Condvar, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
@@ -78,10 +79,49 @@ impl Router {
         true
     }
     fn fail_all(&self) {
+        self.fail_with_reason("TDLib client closed");
+    }
+    fn fail_with_reason(&self, reason: &str) {
         let mut pending = self.pending.lock().unwrap();
         self.sealed.store(true, Ordering::SeqCst);
         for (_, tx) in pending.drain() {
-            let _ = tx.send(Err("TDLib client closed".into()));
+            let _ = tx.send(Err(reason.into()));
+        }
+    }
+}
+#[derive(Default, PartialEq)]
+enum SubmissionPhase {
+    #[default]
+    Accepting,
+    Closing,
+    ReceiverFailed,
+}
+#[derive(Default)]
+struct ClientSubmission {
+    phase: SubmissionPhase,
+    terminal_sent: bool,
+}
+impl ClientSubmission {
+    fn submit(&mut self, terminal: bool, send: impl FnOnce()) -> Result<()> {
+        match self.phase {
+            SubmissionPhase::Accepting => {}
+            SubmissionPhase::Closing => {
+                return Err("TDLib client is closing; new requests rejected".into());
+            }
+            SubmissionPhase::ReceiverFailed => return Err("Shared TDLib receiver failed".into()),
+        }
+        if terminal {
+            self.phase = SubmissionPhase::Closing;
+            self.terminal_sent = true;
+        }
+        send();
+        Ok(())
+    }
+    fn close(&mut self, send: impl FnOnce()) {
+        if !self.terminal_sent {
+            self.phase = SubmissionPhase::Closing;
+            self.terminal_sent = true;
+            send();
         }
     }
 }
@@ -91,10 +131,13 @@ struct ClientSlot {
     router: Arc<Router>,
     closed: Arc<(Mutex<bool>, Condvar)>,
     on_update: UpdateHandler,
+    submission: Arc<Mutex<ClientSubmission>>,
 }
 struct SharedReceiver {
     clients: Arc<Mutex<HashMap<i32, Arc<ClientSlot>>>>,
     stop: Arc<AtomicBool>,
+    failed: Arc<AtomicBool>,
+    closing_recovery: bool,
     worker: Option<thread::JoinHandle<()>>,
 }
 static RECEIVER: OnceLock<Mutex<Option<SharedReceiver>>> = OnceLock::new();
@@ -103,39 +146,110 @@ static RECEIVE_LOOPS: AtomicU64 = AtomicU64::new(0);
 fn receiver() -> &'static Mutex<Option<SharedReceiver>> {
     RECEIVER.get_or_init(|| Mutex::new(None))
 }
-impl SharedReceiver {
-    fn start() -> Result<Self> {
-        execute_sync(&json!({"@type":"setLogVerbosityLevel","new_verbosity_level":0}))?;
-        let clients = Arc::new(Mutex::new(HashMap::<i32, Arc<ClientSlot>>::new()));
-        let stop = Arc::new(AtomicBool::new(false));
-        let map = clients.clone();
-        let flag = stop.clone();
-        let worker = thread::Builder::new()
-            .name("tdlib-shared-receiver".into())
-            .spawn(move || {
-                #[cfg(test)]
-                assert_eq!(RECEIVE_LOOPS.fetch_add(1, Ordering::SeqCst), 0);
-                while !flag.load(Ordering::SeqCst) {
+struct ReceiverExitGuard {
+    clients: Arc<Mutex<HashMap<i32, Arc<ClientSlot>>>>,
+    failed: Arc<AtomicBool>,
+    stop: Arc<AtomicBool>,
+}
+impl Drop for ReceiverExitGuard {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        RECEIVE_LOOPS.fetch_sub(1, Ordering::SeqCst);
+        if !self.stop.load(Ordering::SeqCst) {
+            fail_receiver(&self.clients, &self.failed);
+        }
+    }
+}
+fn fail_receiver(map: &Mutex<HashMap<i32, Arc<ClientSlot>>>, failed: &AtomicBool) {
+    failed.store(true, Ordering::SeqCst);
+    let slots: Vec<_> = map
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .values()
+        .cloned()
+        .collect();
+    // Complete every pending request before notifying any UI callback, including a
+    // callback that itself panics. Closed is never fabricated on receiver failure.
+    for slot in &slots {
+        slot.submission
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .phase = SubmissionPhase::ReceiverFailed;
+        slot.router.fail_with_reason("Shared TDLib receiver failed");
+        let _closed_guard = slot.closed.0.lock().unwrap_or_else(|e| e.into_inner());
+        slot.closed.1.notify_all();
+    }
+    for slot in slots {
+        let _ = catch_unwind(AssertUnwindSafe(|| {
+            (slot.on_update)(json!({"@type":"runtimeReceiverFailed"}))
+        }));
+    }
+}
+fn spawn_receiver(
+    clients: Arc<Mutex<HashMap<i32, Arc<ClientSlot>>>>,
+    stop: Arc<AtomicBool>,
+    failed: Arc<AtomicBool>,
+) -> Result<thread::JoinHandle<()>> {
+    thread::Builder::new()
+        .name("tdlib-shared-receiver".into())
+        .spawn(move || {
+            #[cfg(test)]
+            assert_eq!(RECEIVE_LOOPS.fetch_add(1, Ordering::SeqCst), 0);
+            let _exit = ReceiverExitGuard {
+                clients: clients.clone(),
+                failed,
+                stop: stop.clone(),
+            };
+            let _ = catch_unwind(AssertUnwindSafe(|| {
+                while !stop.load(Ordering::SeqCst) {
                     let ptr = unsafe { ffi::td_receive(0.1) };
                     if ptr.is_null() {
                         continue;
                     }
-                    // Copy before the next receive/execute on this thread invalidates the pointer.
                     let owned = unsafe { CStr::from_ptr(ptr).to_string_lossy().into_owned() };
                     let Ok(v) = serde_json::from_str::<Value>(&owned) else {
                         continue;
                     };
-                    dispatch_client(&map, v);
+                    dispatch_client(&clients, v);
                 }
-                #[cfg(test)]
-                assert_eq!(RECEIVE_LOOPS.fetch_sub(1, Ordering::SeqCst), 1);
-            })
-            .map_err(|_| "Cannot start TDLib receiver")?;
+            }));
+        })
+        .map_err(|_| "Cannot start TDLib receiver".into())
+}
+impl SharedReceiver {
+    fn start() -> Result<Self> {
+        execute_sync(&json!({"@type":"setLogVerbosityLevel","new_verbosity_level":0}))?;
+        let clients = Arc::new(Mutex::new(HashMap::new()));
+        let stop = Arc::new(AtomicBool::new(false));
+        let failed = Arc::new(AtomicBool::new(false));
+        let worker = spawn_receiver(clients.clone(), stop.clone(), failed.clone())?;
         Ok(Self {
             clients,
             stop,
+            failed,
+            closing_recovery: false,
             worker: Some(worker),
         })
+    }
+}
+// Recovery resumes only the same old clients to observe their safe close. All
+// routers remain sealed; neither business requests nor new clients are admitted.
+fn recover_receiver_for_close() {
+    let mut shared = receiver().lock().unwrap_or_else(|e| e.into_inner());
+    let Some(r) = shared.as_mut() else {
+        return;
+    };
+    if !r.failed.load(Ordering::SeqCst) {
+        return;
+    }
+    if let Some(worker) = r.worker.take() {
+        let _ = worker.join();
+    }
+    r.closing_recovery = true;
+    r.failed.store(false, Ordering::SeqCst);
+    match spawn_receiver(r.clients.clone(), r.stop.clone(), r.failed.clone()) {
+        Ok(worker) => r.worker = Some(worker),
+        Err(_) => fail_receiver(&r.clients, &r.failed),
     }
 }
 fn dispatch_client(map: &Mutex<HashMap<i32, Arc<ClientSlot>>>, v: Value) {
@@ -151,14 +265,15 @@ fn dispatch_client(map: &Mutex<HashMap<i32, Arc<ClientSlot>>>, v: Value) {
     }; // Unknown/retired client, including late replies.
     let closed = v["@type"] == "updateAuthorizationState"
         && v["authorization_state"]["@type"] == "authorizationStateClosed";
-    if !slot.router.dispatch(v.clone()) {
-        (slot.on_update)(v);
-    }
+    let response = slot.router.dispatch(v.clone());
     if closed {
         slot.router.fail_all();
         map.lock().unwrap().remove(&id);
         *slot.closed.0.lock().unwrap() = true;
         slot.closed.1.notify_all();
+    }
+    if !response {
+        (slot.on_update)(v);
     }
 }
 fn stop_receiver_if_empty() {
@@ -202,6 +317,8 @@ pub struct TdlibGateway {
     router: Arc<Router>,
     sequence: AtomicU64,
     closed: Arc<(Mutex<bool>, Condvar)>,
+    submission: Arc<Mutex<ClientSubmission>>,
+    receiver_failed: Arc<AtomicBool>,
 }
 impl TdlibGateway {
     fn enqueue(&self, mut body: Value) -> Result<PendingRequest> {
@@ -212,9 +329,13 @@ impl TdlibGateway {
         body["@extra"] = json!(tag);
         let request = CString::new(body.to_string()).map_err(|_| "Invalid TDLib request")?;
         let (tx, rx) = mpsc::channel();
+        let mut submission = self.submission.lock().unwrap_or_else(|e| e.into_inner());
         self.router.insert(tag.clone(), tx)?;
-        unsafe {
+        if let Err(error) = submission.submit(body["@type"] == "logOut", || unsafe {
             ffi::td_send(self.client, request.as_ptr());
+        }) {
+            self.router.remove(&tag);
+            return Err(error);
         }
         Ok(PendingRequest {
             tag,
@@ -230,7 +351,12 @@ impl TdlibGateway {
         }
         let r = shared.as_ref().unwrap();
         // Hold the map lock from creation through registration: no early update can be lost.
-        let mut clients = r.clients.lock().unwrap();
+        let mut clients = r.clients.lock().unwrap_or_else(|e| e.into_inner());
+        if r.failed.load(Ordering::SeqCst) || r.closing_recovery {
+            return Err(
+                "Shared receiver failed; safely close existing clients before reconnecting".into(),
+            );
+        }
         let client = unsafe { ffi::td_create_client_id() };
         if client <= 0 {
             drop(clients);
@@ -240,12 +366,14 @@ impl TdlibGateway {
         }
         let router = Arc::new(Router::default());
         let closed = Arc::new((Mutex::new(false), Condvar::new()));
+        let submission = Arc::new(Mutex::new(ClientSubmission::default()));
         clients.insert(
             client,
             Arc::new(ClientSlot {
                 router: router.clone(),
                 closed: closed.clone(),
                 on_update: Box::new(on_update),
+                submission: submission.clone(),
             }),
         );
         Ok(Arc::new(Self {
@@ -253,6 +381,8 @@ impl TdlibGateway {
             router,
             sequence: AtomicU64::new(1),
             closed,
+            submission,
+            receiver_failed: r.failed.clone(),
         }))
     }
     pub fn is_closed(&self) -> bool {
@@ -262,16 +392,24 @@ impl TdlibGateway {
         // TDLib begins emitting updates after the first request. No synchronous wait
         // here: a broken client must not delay creation of the next profile's client.
         let request = CString::new(json!({"@type":"getAuthorizationState"}).to_string()).unwrap();
-        unsafe {
-            ffi::td_send(self.client, request.as_ptr());
-        }
+        let _ = self
+            .submission
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .submit(false, || unsafe {
+                ffi::td_send(self.client, request.as_ptr());
+            });
     }
     pub fn begin_close(&self) {
+        recover_receiver_for_close();
         if !self.is_closed() {
             let request = CString::new(json!({"@type":"close"}).to_string()).unwrap();
-            unsafe {
-                ffi::td_send(self.client, request.as_ptr());
-            }
+            self.submission
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .close(|| unsafe {
+                    ffi::td_send(self.client, request.as_ptr());
+                });
         }
     }
     pub fn shutdown(&self) -> Result<()> {
@@ -286,10 +424,16 @@ impl TdlibGateway {
             .wait_timeout_while(
                 self.closed.0.lock().unwrap(),
                 Duration::from_secs(20),
-                |closed| !*closed,
+                |closed| !*closed && !self.receiver_failed.load(Ordering::SeqCst),
             )
             .unwrap();
         if !*guard {
+            if self.receiver_failed.load(Ordering::SeqCst) {
+                return Err(
+                    "Shared TDLib receiver failed; safe close was not verified, retry disconnect"
+                        .into(),
+                );
+            }
             return Err(
                 "Timed out waiting for authorizationStateClosed; session kept open for safe retry"
                     .into(),
@@ -339,6 +483,151 @@ impl TelegramGateway for TdlibGateway {
 #[cfg(test)]
 mod tests {
     use super::*;
+    static NATIVE_TEST_LOCK: Mutex<()> = Mutex::new(());
+    #[test]
+    fn concurrent_submit_and_close_have_a_single_submission_boundary() {
+        let gate = Arc::new(Mutex::new(ClientSubmission::default()));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let barrier = Arc::new(std::sync::Barrier::new(9));
+        let workers: Vec<_> = (0..8)
+            .map(|_| {
+                let (gate, calls, barrier) = (gate.clone(), calls.clone(), barrier.clone());
+                thread::spawn(move || {
+                    barrier.wait();
+                    for _ in 0..100 {
+                        let _ = gate
+                            .lock()
+                            .unwrap()
+                            .submit(false, || calls.lock().unwrap().push("request"));
+                    }
+                })
+            })
+            .collect();
+        barrier.wait();
+        gate.lock()
+            .unwrap()
+            .close(|| calls.lock().unwrap().push("close"));
+        for worker in workers {
+            worker.join().unwrap();
+        }
+        gate.lock()
+            .unwrap()
+            .close(|| panic!("close must be idempotent"));
+        assert!(
+            gate.lock()
+                .unwrap()
+                .submit(false, || panic!("no request after close"))
+                .is_err()
+        );
+        assert_eq!(calls.lock().unwrap().last(), Some(&"close"));
+        assert_eq!(
+            calls
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|v| **v == "close")
+                .count(),
+            1
+        );
+        let mut logout = ClientSubmission::default();
+        logout.submit(true, || {}).unwrap();
+        logout.close(|| panic!("must not race logOut with close"));
+        assert!(logout.submit(false, || {}).is_err());
+    }
+    #[test]
+    fn receiver_failure_completes_all_pending_even_when_a_notice_callback_panics() {
+        let map = Mutex::new(HashMap::new());
+        let failed = AtomicBool::new(false);
+        let notices = Arc::new(AtomicU64::new(0));
+        let mut pending = Vec::new();
+        for id in [1, 2] {
+            let notices = notices.clone();
+            let slot = Arc::new(ClientSlot {
+                router: Arc::new(Router::default()),
+                closed: Arc::new((Mutex::new(false), Condvar::new())),
+                submission: Arc::new(Mutex::new(ClientSubmission::default())),
+                on_update: Box::new(move |_| {
+                    notices.fetch_add(1, Ordering::SeqCst);
+                    if id == 1 {
+                        panic!("synthetic callback failure");
+                    }
+                }),
+            });
+            let (tx, rx) = mpsc::channel();
+            slot.router.insert("same".into(), tx).unwrap();
+            pending.push((slot.clone(), rx));
+            map.lock().unwrap().insert(id, slot);
+        }
+        fail_receiver(&map, &failed);
+        assert!(failed.load(Ordering::SeqCst));
+        assert_eq!(notices.load(Ordering::SeqCst), 2);
+        for (slot, rx) in pending {
+            assert!(
+                rx.recv_timeout(Duration::from_millis(100))
+                    .unwrap()
+                    .unwrap_err()
+                    .contains("receiver failed")
+            );
+            assert!(slot.router.pending.lock().unwrap().is_empty());
+            assert!(!*slot.closed.0.lock().unwrap()); // Failure is not authorizationStateClosed.
+            assert!(
+                slot.submission
+                    .lock()
+                    .unwrap()
+                    .submit(false, || {})
+                    .is_err()
+            );
+        }
+        assert_eq!(map.lock().unwrap().len(), 2);
+    }
+    #[test]
+    fn native_callback_panic_fails_other_client_requests_and_recovers_only_for_close() {
+        let _serial = NATIVE_TEST_LOCK.lock().unwrap();
+        let panic_once = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = mpsc::channel();
+        let a = TdlibGateway::new(move |v| {
+            if v["@type"] == "runtimeReceiverFailed" {
+                let _ = tx.send(());
+            } else if v["@type"] == "updateAuthorizationState"
+                && panic_once.swap(false, Ordering::SeqCst)
+            {
+                panic!("synthetic receive callback panic");
+            }
+        })
+        .unwrap();
+        let b = TdlibGateway::new(|_| {}).unwrap();
+        let request = b.enqueue(json!({"@type":"disableProxy"})).unwrap();
+        a.start_authorization_updates();
+        rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let start = Instant::now();
+        assert!(
+            request
+                .wait(&AtomicBool::new(false))
+                .unwrap_err()
+                .contains("receiver failed")
+        );
+        assert!(start.elapsed() < Duration::from_secs(1));
+        assert!(TdlibGateway::new(|_| {}).is_err());
+        assert!(!a.is_closed());
+        assert!(!b.is_closed());
+        let wait = Instant::now();
+        assert!(b.wait_closed().unwrap_err().contains("receiver failed"));
+        assert!(wait.elapsed() < Duration::from_secs(1));
+        b.begin_close();
+        assert!(
+            b.request(
+                json!({"@type":"getAuthorizationState"}),
+                &AtomicBool::new(false)
+            )
+            .is_err()
+        );
+        assert!(TdlibGateway::new(|_| {}).is_err());
+        b.wait_closed().unwrap();
+        a.shutdown().unwrap();
+        assert_eq!(RECEIVE_LOOPS.load(Ordering::SeqCst), 0);
+        let fresh = TdlibGateway::new(|_| {}).unwrap();
+        fresh.shutdown().unwrap();
+    }
     #[test]
     fn client_routing_same_tags_updates_close_timeout_and_retired_ids_are_isolated() {
         let map = Mutex::new(HashMap::new());
@@ -349,6 +638,7 @@ mod tests {
                 router: Arc::new(Router::default()),
                 closed: Arc::new((Mutex::new(false), Condvar::new())),
                 on_update: Box::new(move |v| events.lock().unwrap().push((id, v))),
+                submission: Arc::new(Mutex::new(ClientSubmission::default())),
             });
             map.lock().unwrap().insert(id, slot.clone());
             slot
@@ -459,6 +749,7 @@ mod tests {
     }
     #[test]
     fn native_receiver_concurrent_requests_cancel_close_and_restart() {
+        let _serial = NATIVE_TEST_LOCK.lock().unwrap();
         // No parameters, credentials, session directory, or Telegram network are used.
         let g = TdlibGateway::new(|_| {}).unwrap();
         let other = TdlibGateway::new(|_| {}).unwrap();

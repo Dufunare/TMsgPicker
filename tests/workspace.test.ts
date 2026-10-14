@@ -70,3 +70,35 @@ test('global rebuild generations replace each profile view independently',()=>{
   assert.equal(state.statuses.A?.generation,2);assert.equal(state.statuses.B?.generation,2);
   assert.equal(state.statuses.B?.runtime_state,'NeedsDatabasePassphrase');
 });
+test('Unknown receipts survive disconnect and rebuild without changing another account',()=>{
+  const state=createAccountViews();state.connection(status('A'));state.connection(status('B'));
+  for(const id of ['A','B']){state.get(id).reportTarget='10';state.get(id).report={items:[{source:{chat_id:'1',message_id:'2'},state:'Pending',detail:'',sent_id:'3'}]};}
+  state.sent({profile_id:'A',generation:1,target:'10',old_message_id:'3',state:'Unknown'});
+  assert.equal(state.get('A').report?.items[0]?.state,'Unknown');assert.equal(state.get('B').report?.items[0]?.state,'Pending');
+  state.connection(status('A',2));state.reset('A');
+  assert.equal(state.get('A').uncertainSends.length,1);assert.equal(state.get('B').uncertainSends.length,0);
+  state.sent({profile_id:'A',generation:1,target:'10',old_message_id:'3',state:'Unknown'});
+  assert.equal(state.get('A').uncertainSends.length,1);
+  state.sent({profile_id:'A',generation:2,target:'10',old_message_id:'3',state:'Sent'});
+  assert.equal(state.get('A').uncertainSends.length,1); // Reused temporary ID in new client.
+});
+test('pending disconnect cancellation leaves client alone and confirmation passes the reviewed token',async()=>{
+  const calls:Array<{command:string;args:unknown}>=[];
+  let w!:ReturnType<typeof useWorkspace>;
+  const transport=async(command:string,args:unknown)=>{calls.push({command,args});if(command==='close_guard')return {pending_count:1,retry_after_ms:0,token:'reviewed'};};
+  const app=renderer.createApp({setup(){w=useWorkspace(false,transport as Parameters<typeof useWorkspace>[1],(async()=>{}) as Parameters<typeof useWorkspace>[2]);return()=>h('div');}});app.mount({});w.profileId.value='A';
+  const cancelled=w.disconnect();await new Promise(resolve=>setImmediate(resolve));assert.match(w.dialog.value?.text??'',/Unknown/);w.answerDialog(null);await cancelled;
+  assert.deepEqual(calls.map(c=>c.command),['close_guard']);
+  const confirmed=w.disconnect();await new Promise(resolve=>setImmediate(resolve));w.answerDialog({text:'',deleteData:false});await confirmed;
+  assert.deepEqual(calls.at(-1),{command:'disconnect',args:{profileId:'A',closeConfirmation:'reviewed'}});
+  assert.equal(calls.some(c=>c.command==='logout_account'),false);app.unmount();
+});
+test('pending wait does not close early or erase unsaved global secrets',async()=>{
+  const calls:string[]=[],emissions:string[]=[];let w!:ReturnType<typeof useWorkspace>;
+  const transport=async(command:string)=>{calls.push(command);if(command==='close_guard')return {pending_count:1,retry_after_ms:30000,token:null};};
+  const app=renderer.createApp({setup(){w=useWorkspace(false,transport as Parameters<typeof useWorkspace>[1],(async(name:string)=>{emissions.push(name);}) as Parameters<typeof useWorkspace>[2]);return()=>h('div');}});app.mount({});w.profileId.value='A';
+  w.snapshot.value={settings:{schema_version:1,api_id:1,proxy_enabled:false,proxy_server:'localhost',proxy_port:1080,proxy_username:'',last_profile_id:'A',left_ratio:.23,right_ratio:.29,card_compact:false},profiles:[],has_saved_api_hash:true,has_saved_proxy_password:false};
+  w.apiHash.value='unsaved synthetic hash';const save=w.saveSettings();await new Promise(resolve=>setImmediate(resolve));
+  assert.match(w.dialog.value?.text??'',/30/);w.answerDialog({text:'',deleteData:false});await save;
+  assert.deepEqual(calls,['close_guard']);assert.deepEqual(emissions,[]);assert.equal(w.apiHash.value,'unsaved synthetic hash');app.unmount();
+});

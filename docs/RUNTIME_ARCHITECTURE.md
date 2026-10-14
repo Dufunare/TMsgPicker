@@ -51,10 +51,13 @@ AccountRuntime {
     profile_id: String, epoch: u64, gateway: Option<Arc<TdlibGateway>>,
     connection: Connection, connecting: bool, closing: bool,
     active: Option<(run_id, cancel_flag)>, results: Option<ScanResult>,
-    forwarding: bool, pending: Map<target_and_temporary_id, state>,
+    forwarding: bool, pending: Map<target_and_temporary_id, PendingSend>,
     sent_updates: Map<target_and_temporary_id, state>,
+    unknown_sends: Vec<UnknownSend>, // 本进程内历史，跨断开／重建保留
     unlocked_passphrase: Option<String>, lifecycle: Mutex<()>,
 }
+PendingSend { started_at: Instant } // 单调时钟，不持久化
+UnknownSend { profile_id, generation, target, old_message_id, state: "Unknown" }
 Connection {
     profile_id: Option<String>, generation: u64,
     runtime_state: String, auth_state: String,
@@ -88,6 +91,10 @@ ApplicationConfigService 验证／更新唯一配置，Store 协调持久化；�
 
 Router 支持多个 Pending，Drop／超时／取消清理自己的请求。Client Closed 时封闭自己的 Router、失败自己的 Pending、移除自己的 Slot，再通知 Closed；不影响其他 Router。未知／已移除 Client 消息直接丢弃。重建使用新的 Client ID 和 epoch。最后一个 Client 的 wait_closed 检查映射为空，停止并 join 接收线程；join 与新建 Client 共享管理锁，避免新旧接收循环重叠。同步 execute 也立即复制返回指针；桌面接收器运行前才执行日志设置。
 
+每个 ClientSlot 额外共享提交锁与 `Accepting / Closing / ReceiverFailed` 状态。enqueue 在同一锁内登记 Router 并发送；close／logOut 在同一锁内先转为 Closing、再发送终止请求。因此 close 之后、真实 Closed 之前的新业务也会被拒绝。close 幂等，logOut 已提交后不追加 close；该提交锁不限制其他 Client 并发。
+
+接收线程使用 Rust unwind 捕获及退出守卫。异常终止先封闭所有旧 Router，立即错误完成全部 Pending，再逐账号通知 Runtime Error；通知回调异常也不会阻止其他账号收到故障。等待 Closed 的线程立即获知故障，不伪造原生 Closed，也不打开同一 Session。用户重试断开时，先 join 故障线程，再启动唯一的接收线程继续观察原 Client Map 的关闭；旧 Router 保持封闭，禁止新业务和新 Client，直到全部旧 Client 真正 Closed。原生 Closed 内部清理先于外部回调，回调异常不能阻止安全关闭记录。此机制处理 Rust panic／线程异常返回，不声称恢复原生访问违规、abort 或强制杀进程。
+
 ## 调用流程
 
 | 操作 | 实际流程 |
@@ -104,7 +111,9 @@ Router 支持多个 Pending，Drop／超时／取消清理自己的请求。Clie
 | 全局设置 | 验证新配置 → 对全部 Client 提交 close → 并发等 Closed → 统一保存配置 → 并发重建全部 Profile；内存／DPAPI 口令可用则恢复，否则 Locked；逐账号报告失败 |
 | 退出应用 | 标记 exiting 拒绝新任务 → 等正在提交的业务释放全局读锁 → 检查 Pending 发送 → 全部提交 close → 并发等待 Closed（共享约 20 秒等待窗口）→ 清理 Pending／join 共享接收器 → 退出；失败保留进程供重试 |
 
-未完成授权的 Profile 可保留后续继续。Pending 转发保护只限制影响该客户端生命周期的操作，切换视图不受此限制；全局重建／应用退出需要等待全部 Pending 的最终发送状态。
+未完成授权的 Profile 可保留后续继续。Pending 转发保护只限制影响该客户端生命周期的操作，切换视图不受此限制。断开、全局重建和退出先检查 Pending：每项至少等待 30 秒后，可让用户明确确认将未确认发送标为 Unknown，再 close。关闭失败仍保留 Gateway，不强开原目录。移除和注销仍等待最终发送状态。
+
+`close_guard` 返回数量、剩余等待毫秒和可选确认令牌，不改变 Client。令牌绑定 Profile、epoch、目标／临时消息集合，5 分钟有效且只能用一次。执行关闭前，在发送更新／Pending 锁下统一校验所有账号；新增 Pending、换代、过期令牌或仍在提交转发均拒绝，避免部分账号先被错误标记。确认后记录 Unknown 并按 Profile 广播；不推断失败或送达、不自动重试。主窗口关闭请求通过仅发给 main 的事件显示确认，设置窗口不争抢确认。取消不修改 Client、配置或未保存输入。Unknown 历史跨本进程的断开／重建保留，旧 Client 的明确回执可修正；退出后记录不持久化，确认框明确提醒核对 Telegram。
 
 ## 持久化和兼容
 
@@ -118,7 +127,9 @@ Router 支持多个 Pending，Drop／超时／取消清理自己的请求。Clie
   tdlib/accounts/<profile>/db, files
 ```
 
-迁移时先写凭据和注册表，最后写 app-config 作为完成标记。此后读取新文件，避免重复读取旧快照。旧 Profile 补齐目录标识；已有 DPAPI 密文原样迁入，Legacy 口令仍对应 `db:legacy`，Base64 参数规则不变。Legacy 导入标记即使移除 Legacy 登记也保留，避免重启再次导入留下的旧目录。损坏存储不静默重置；各文件独立 flush／原子替换。没有在开发期间操作真实 appdata 或删除任何现有 Session／数据库／凭据。
+Store 的公开修改方法创建私有暂存对象；校验／保护秘密／修改元数据只作用于暂存对象。三个文件先全部写入并 flush 到临时文件，然后写 `storage-transaction.json`（三个固定路径的旧字节，秘密为 DPAPI 密文），逐个原子替换正式文件，最后删除日志作为提交点。全部成功后才发布新内存。任一步失败恢复整组旧文件；恢复失败保留日志并明确拒绝后续写入。启动先验证并恢复未完成日志，再加载配置，不能读取半次提交。清除代理密码及用户名在同一事务中完成。该日志协调多文件提交，不宣称三个文件的文件系统级同时替换或断电硬件保证。
+
+迁移仍保留原始 settings.json，不反复读取旧快照。旧 Profile 补齐目录标识；已有 DPAPI 密文原样迁入，Legacy 口令仍对应 `db:legacy`；Base64 参数规则不变。Legacy 导入标记即使移除 Legacy 登记也保留，避免重启再次导入留下的旧目录。损坏存储不静默重置。没有在开发期间操作真实 appdata 或删除任何现有 Session／数据库／凭据。
 
 ## 自动化验证与人工验收
 
@@ -129,9 +140,19 @@ Router 支持多个 Pending，Drop／超时／取消清理自己的请求。Clie
 3. A 开始历史查询，切到 B 开始另一个查询，再切回 A；A 的聊天、条件、扫描进度、结果和选择恢复，两个账号均保持连接。切换过程中不出现断开／重新登录。
 4. 两个账号分别等待授权输入时，不自动打开争抢焦点的窗口；只在选择对应账号后手动打开 Settings，并按各自实际步骤提交。
 5. 断开 A 后 B 的聊天和查询仍可使用；恢复 A 复用原 Session。普通应用退出后再开，不要求重新登录 Telegram。
-6. 修改全局代理或 API，观察全部 Client 安全关闭并恢复；一个账号口令／网络失败不影响其他账号状态。等待 Pending 转发完成后再修改。
+6. 修改全局代理或 API，观察全部 Client 安全关闭并恢复；一个账号口令／网络失败不影响其他账号状态。有 Pending 时先等待明确回执，或按超时后的 Unknown 确认流程关闭。
 7. 添加并登录重复 Telegram 用户，确认冲突 Profile 断开并明确提示，旧 Profile／凭据／目录保持完整；默认移除冲突条目保留目录。
 8. 只有明确点击并确认“退出 Telegram 登录”才验证注销；再次使用该 Profile 按 TDLib 要求重新授权。默认移除账号不注销，Legacy 删除选项不可用。
 9. 查看布局拖动、Compact 偏好和独立 Settings 关闭行为；真实原文链接、受保护转发预检和 Pending → Sent／Failed 需由用户在可控目标上确认。
 
 尚未人工验证：真实多账号登录、SOCKS5 连通性、已有加密 Session 复用、真实 getMe 去重、真实发送状态及 WebView2 视觉交互；构建和离线测试不能替代这些步骤。安装包 MSI／NSIS 分发仍不在本轮验收范围。
+
+## 2026-10-14 P2 修复补充验收
+
+本轮基于用户合并并微调 UI 后的本地 main。构建产物使用独立 target，未停止现有应用、未操作真实 Session、未推送或合并。自动结果见 [最新修复记录](MVP_ACCEPTANCE.md#2026-10-14-p2-稳定性修复)。
+
+1. 在用户明确允许发送的可控目标上造成 Pending，立即断开／保存全局配置／关闭主窗口，应提示剩余等待时间，且不关闭任何 Client。等待每项至少 30 秒后重试；取消确认应保留连接和未保存的设置输入。
+2. 超时后确认断开 A，A 的发送显示 Unknown，B 继续运行。重连 A 或全局重建后仍可查看本进程 Unknown 记录。先在 Telegram 核对实际结果，不据 Unknown 自动重发。
+3. 全局配置／退出确认期间若后台又出现新的 Pending，操作应拒绝并要求重新审阅；不能沿用旧令牌。退出确认只在主窗口出现。确认退出后重开仍复用登录，未执行 logOut。
+4. 在独立临时数据目录中测试写入权限／文件占用失败，确认设置错误后内存快照及磁盘仍是旧值；修复权限后可重试。不得在真实 Session 上破坏配置来测试恢复。
+5. 接收线程 panic、Pending 立即失败、仅为关闭恢复接收线程及并发关闭由原生自动测试覆盖；真实 DLL 进程崩溃无法通过 Rust 捕获恢复。真实断网、长 Pending、DPAPI 故障及 WebView2 确认窗口仍需本机手工验收。

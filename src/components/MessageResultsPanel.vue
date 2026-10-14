@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { useWorkspaceContext } from '../useWorkspace';
-const {ready,busy,error,chatList,selectedChat,result,scanning,selected,target,confirmation,forwarding,report,preview,targetTitle,selectedMessageCount,savedMessages,openPost,prepareForward,forward,count,reactionLabel,date}=useWorkspaceContext();
+const {ready,busy,error,chatList,selectedChat,result,scanning,selected,target,confirmation,forwarding,report,preview,uncertainSends,targetTitle,selectedMessageCount,savedMessages,openPost,prepareForward,forward,count,reactionLabel,date}=useWorkspaceContext();
 </script>
 <template>
 <section class="results"><div class="panel result-header"><p v-if="error" role="alert" class="error">{{error}}</p><h2>{{selectedChat?.title ?? 'Messages & Results'}} <span v-if="result" class="badge" :class="result.status">{{ result.status }}</span></h2><p v-if="result">已扫描 {{ result.scanned }} 条 · {{ result.pages }} 页 · {{ result.exact ? 'Exact：此 Scope 内精确排名' : 'Partial：临时或不完整排名' }}</p><p class="muted">{{ result?.detail ?? '选择聊天并执行查询。' }}</p></div>
@@ -10,6 +10,7 @@ const {ready,busy,error,chatList,selectedChat,result,scanning,selected,target,co
           <div v-if="confirmation" class="confirm" role="dialog" aria-label="确认转发"><p>确认将 {{ selectedMessageCount }} 条成员消息转发到「{{ targetTitle }}」？受保护或权限不足的消息会被拒绝，逐条报告结果。</p><p v-for="item in preview?.items ?? []" :key="`${item.source.chat_id}:${item.source.message_id}`">{{ item.source.message_id }} — {{ item.state }} · {{ item.detail }}</p><button class="primary" :disabled="forwarding || !preview?.items.some(i=>i.state==='Allowed')" @click="forward">{{ forwarding ? '正在转发…' : '确认转发' }}</button><button :disabled="forwarding" @click="confirmation=false">返回</button></div>
           <div v-if="report"><h3>转发结果</h3><p v-for="item in report.items" :key="`${item.source.chat_id}:${item.source.message_id}`">{{ item.source.chat_id }} / {{ item.source.message_id }} — {{ item.state }} · {{ item.detail }}</p><small>Pending 仅表示 TDLib 接受请求；等待发送更新后才计为 Sent。</small></div>
         </section>
+        <section v-if="uncertainSends.length" class="panel actions"><h3>送达状态未知 · Unknown</h3><p>以下发送在关闭前未收到最终回执，可能已送达。请在 Telegram 检查后再决定是否重发；这些记录仅在本进程保留。</p><p v-for="send in uncertainSends" :key="`${send.generation}:${send.target}:${send.old_message_id}`">目标 {{send.target}} / 临时消息 {{send.old_message_id}} — Unknown</p></section>
       </section>
     
 </template>

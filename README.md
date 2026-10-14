@@ -22,7 +22,7 @@ pnpm.cmd tauri dev
 
 左上用户卡片显示姓名、username 与状态，右侧图标提供添加、切换和更多操作；卡片底部小箭头可收缩到 Compact 模式并记住偏好。卡片外侧齿轮打开独立的 500 × 580 Settings 小窗；重复点击聚焦已有窗口，关闭小窗不会断开 TDLib。API/代理、数据库口令和手机号/验证码/2FA 授权均在小窗中处理，不占用聊天列表。保存配置优先于 `TMSGPICKER_API_ID` / `TMSGPICKER_API_HASH` 环境变量，未配置时使用环境变量；密码输入框留空保留已保存值，明确的清除按钮删除保存值。保存 API/代理配置会安全关闭并重建全部账号；各账号的失败原因独立显示。已解锁账号可用本进程内口令恢复，未解锁账号仍需口令。配置重置只重置普通设置，保留账号、秘密与 Session；同样重建全部账号。
 
-数据位于 `%LOCALAPPDATA%\com.funare.tmsgpicker\`：`app-config.json` 保存唯一应用配置，`accounts.json` 保存账号注册表，`credential-store.json` 只保存当前 Windows 用户范围的 DPAPI 密文。旧 `settings.json` 非破坏迁移后保留为原始备份，后续不再读取它。各文件写入经过 flush 和 Windows 原子替换；损坏或未来版本明确报错。API Hash、代理密码和可选数据库口令仅由 Rust 解密，读取 IPC 只返回保存标志，不回填 Vue。数据库口令按 Profile ID 隔离，仅初始化成功后保存；验证码和 2FA 不持久化。保护失败需清除对应保存凭据并重新输入，不降级为明文。
+数据位于 `%LOCALAPPDATA%\com.funare.tmsgpicker\`：`app-config.json` 保存唯一应用配置，`accounts.json` 保存账号注册表，`credential-store.json` 只保存当前 Windows 用户范围的 DPAPI 密文。旧 `settings.json` 非破坏迁移后保留为原始备份，后续不再读取它。修改先暂存，三个文件经 flush、Windows 原子替换及回滚日志协调提交，成功后才更新内存；写入失败恢复旧状态，启动前恢复未完成事务；损坏或未来版本明确报错。回滚日志仅保存原文件字节，秘密仍为 DPAPI 密文。API Hash、代理密码和可选数据库口令仅由 Rust 解密，读取 IPC 只返回保存标志，不回填 Vue。数据库口令按 Profile ID 隔离，仅初始化成功后保存；验证码和 2FA 不持久化。保护失败需清除对应保存凭据并重新输入，不降级为明文。
 
 首次升级检测 `tdlib/db` 后幂等导入 Legacy Profile，继续使用原来的 `tdlib/db` 和 `tdlib/files`，不迁移、覆盖或删除。数据库密码必须使用原有 passphrase；仍按原规则 Base64 编码为 TDLib bytes（Base64 不等于加密）。新账号使用 `tdlib/accounts/<内部 Profile ID>/db` 与 `files`。默认手工输入口令；只有用户勾选「记住此设备」才保存 DPAPI 密文，取消勾选立即清除保存口令而保留数据库。
 
@@ -50,7 +50,9 @@ SOCKS5 服务器填写主机（如 `127.0.0.1`），端口使用实际 SOCKS5/Mi
 
 选中帖子 → 选择目标或解析 Saved Messages → 准备转发 → 查看逐条权限预检 → 明确确认。后端重新验证源消息转发能力和目标成员/发帖/媒体权限。按源聊天分组，成员 ID 去重后严格升序，每批最多 100，使用正常转发，不复制绕过保护。Album 的动作范围是卡片中已扫描的所有成员。
 
-结果逐条区分 Rejected、Failed、Pending、Sent。返回 `null` 或缺项计为 Failed；`messageSendingStatePending` 仅为 Pending，`updateMessageSendSucceeded` / `updateMessageSendFailed` 更新最终状态。关闭前仍 Pending 的项目不能视为送达；本版不持久化发送结果。
+结果逐条区分 Rejected、Failed、Pending、Sent。返回 `null` 或缺项计为 Failed；`messageSendingStatePending` 仅为 Pending，`updateMessageSendSucceeded` / `updateMessageSendFailed` 更新最终状态。断开、退出或修改全局设置时，若发送至少 30 秒仍无回执，可由用户明确确认安全关闭，并将这些发送标为 **Unknown（结果未知）**。取消不关闭账号；确认只使用 close，不注销。Unknown 可能已送达，请先在 Telegram 核对，避免重复发送。记录按账号保留，在本进程断开／重建后仍可查看，退出后不持久化；不会自动重发。
+
+Client 在发送 close 或 logOut 前即停止接受新业务请求，避免后台任务在关闭期间继续提交。共享接收线程异常退出会立即使所有 Pending 请求失败并显示账号错误；重试断开可启动仅用于观察旧 Client 关闭的接收器，仍不接受新业务或重开 Session，全部收到真实 Closed 后才允许重连。Rust 异常退出处理不能恢复原生 DLL 访问违规或进程强制终止。
 
 ## 检查与手动验收
 

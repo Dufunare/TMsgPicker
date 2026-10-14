@@ -1,5 +1,30 @@
 # v0.1 实现与验收记录
 
+## 2026-10-14 P2 稳定性修复
+
+基于用户已合并 UI 微调后的本地 `main`，开工工作区干净。本轮修复四项阻塞／一致性问题，保留三栏、独立 Settings 和用户最新 UI；仅增加 Unknown 历史展示，并移除一个已不使用、导致 TypeScript 构建报错的 closeSettings 绑定。
+
+- Pending 转发每项等待至少 30 秒后，断开／全局设置／退出可由用户明确确认安全关闭，结果为 Unknown。确认令牌绑定 Profile、generation 和消息集合，单次使用、5 分钟有效，新增 Pending 或换代必须重新审阅。取消保留客户端和未保存输入；记录在本进程断开／重建后可查，退出后不持久化。移除／注销仍不绕过 Pending，普通关闭不调用 logOut。
+- Gateway 在提交 close／logOut 前进入 Closing；请求登记、发送、关闭使用同一 Client 提交锁，后续请求被拒绝，重复 close 幂等。
+- Store 修改先暂存，配置／注册表／DPAPI 密文三文件以回滚日志提交，成功后发布内存。失败恢复旧值，启动先恢复未完成事务；清除代理密码与用户名为同一事务。
+- 接收线程 Rust panic／异常返回使全部 Pending 立即失败、逐账号通知错误。重试断开仅恢复旧 Client 的接收和安全关闭，不允许新业务或重开 Session；全部真实 Closed 后才可新建 Client，始终保持单 receive loop。不覆盖原生访问违规／进程 abort 恢复。
+
+| 验证 | 结果 |
+|---|---|
+| `cargo test --manifest-path src-tauri/Cargo.toml --no-default-features` | 33 项通过：12 项持久化／账号 + 21 项业务回归 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib --tests --target-dir src-tauri/target/runtime-check` | 49 项通过：28 项 unit／原生 Runtime + 21 项业务回归 |
+| `pnpm.cmd test` | 6 项通过，Vue 内存渲染器及模拟 IPC |
+| `pnpm.cmd build`（Tauri beforeBuildCommand） | TypeScript 与 Vite 生产构建通过 |
+| `pnpm.cmd tauri build --debug --no-bundle`，设置 `CARGO_TARGET_DIR` | Windows 桌面构建通过，`src-tauri/target/runtime-check/debug/tmsgpicker.exe`，DLL 已 staging |
+| `cargo fmt --manifest-path src-tauri/Cargo.toml --check` | 通过 |
+| `cargo check --manifest-path src-tauri/Cargo.toml --all-targets --target-dir src-tauri/target/runtime-check` | 通过，包含原 CLI 工具 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets --target-dir src-tauri/target/runtime-check -- -D warnings` | 通过，无警告 |
+| `git diff --check` | 通过 |
+
+49 项 Rust 与 6 项前端共 55 项独立测试；离线 33 项为 Rust 的子集。新增覆盖真实并发提交／close 边界、多个 Client 的 Pending 故障传播、故障通知回调 panic、原生接收回调 panic 后仅关闭恢复、超时确认及重放／换代／新 Pending 拒绝、整组持久化各阶段失败及实际 IO 失败、未完成日志恢复、代理凭据清除事务、Unknown 账号隔离与重建保留、取消／等待时不关闭及保留编辑中的秘密。
+
+测试仅使用 fixture、临时目录、mock 和未授权原生 Client；没有真实 Telegram 凭据、真实消息发送或真实 Session 读取。没有删除现有数据库／Session／凭据，没有结束用户运行的应用，没有提交、推送或合并。真实断网长 Pending、Windows WebView2 确认窗口和已登录 Session 的关闭／恢复仍需按 [补充手动验收](RUNTIME_ARCHITECTURE.md#2026-10-14-p2-修复补充验收) 检查；未制作安装包。
+
 ## 2026-10-14 常驻多账号 Runtime 重构
 
 本轮以本地 `review/stability-final-pass-20261013` 分支和干净工作区为基础，保留最新 UI。此前文档中的单活动账号／串行 Session 切换为历史行为，现行结构、状态机、最终数据模型、调用流程和手动验收以 [Runtime 架构与验收](RUNTIME_ARCHITECTURE.md) 为准，接口见 [IPC](IPC.md)。

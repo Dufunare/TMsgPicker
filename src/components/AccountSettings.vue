@@ -1,7 +1,7 @@
 ﻿<script setup lang="ts">
 import {ref,watch} from 'vue';
 import {useWorkspaceContext} from '../useWorkspace';
-const {connection,ready,accountError,notice,apiId,apiHash,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,passphrase,rememberDatabase,authLabel,authValue,busy,forwarding,snapshot,profileId,cardCompact,connect,disconnect,submitAuth,addAccount,selectAccount,renameAccount,removeAccount,logoutAccount,closeSettings,saveSettings,clearSecret,resetSettings,resetLayout,toggleCard}=useWorkspaceContext();
+const {connection,ready,accountError,notice,apiId,apiHash,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,passphrase,rememberDatabase,authLabel,authValue,busy,forwarding,snapshot,profileId,cardCompact,connect,disconnect,submitAuth,addAccount,selectAccount,renameAccount,removeAccount,logoutAccount,saveSettings,clearSecret,resetSettings,resetLayout,toggleCard}=useWorkspaceContext();
 const tab=ref<'account'|'connection'|'security'>('connection');
 watch(authLabel,value=>{if(value)tab.value='account';});
 watch(profileId,()=>{tab.value='account';});

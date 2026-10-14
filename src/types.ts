@@ -13,6 +13,8 @@ export type Filter = { kind: 'compare'; field: Field; op: CompareOp; value: numb
 export interface QuerySpec { version: 1; chat_id: string; scope: { kind: 'recent'; count: number } | { kind: 'dates'; from: number; to: number; budget: number }; filter: Filter; sort: { field: Field; descending: boolean }[]; output_limit: number }
 export interface ActionItem { source: MessageKey; state: string; detail: string; sent_id: string | null }
 export interface ForwardReport { items: ActionItem[] }
+export interface UnknownSend { profile_id: string; generation: number; target: string; old_message_id: string; state: string }
+export interface CloseChallenge { pending_count: number; retry_after_ms: number; token: string | null }
 export interface Settings { schema_version: number; api_id: number | null; proxy_enabled: boolean; proxy_server: string; proxy_port: number; proxy_username: string; last_profile_id: string | null; left_ratio: number; right_ratio: number; card_compact: boolean }
 export interface Profile { profile_id: string; telegram_user_id: string | null; display_name: string; username: string | null; is_legacy_profile: boolean; session_directory_id: string; created_at: number; last_used_at: number; has_saved_database_secret: boolean }
 export interface SettingsSnapshot { settings: Settings; profiles: Profile[]; has_saved_api_hash: boolean; has_saved_proxy_password: boolean }

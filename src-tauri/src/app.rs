@@ -13,6 +13,7 @@ use std::{
         Arc, Mutex, RwLock,
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    time::{Duration, Instant},
 };
 use tauri::{Emitter, Manager, State};
 
@@ -44,6 +45,8 @@ struct AppState {
     store: Mutex<Option<Store>>,
     manager: TdlibRuntimeManager,
     exiting: AtomicBool,
+    close_approvals: Mutex<HashMap<String, CloseApproval>>,
+    approval_sequence: AtomicU64,
 }
 #[derive(Default)]
 struct TdlibRuntimeManager {
@@ -54,7 +57,8 @@ struct AccountRuntime {
     lifecycle: Mutex<()>,
     profile_id: String,
     epoch: AtomicU64,
-    pending: Mutex<HashMap<String, String>>,
+    pending: Mutex<HashMap<String, PendingSend>>,
+    unknown_sends: Mutex<Vec<UnknownSend>>,
     gateway: Mutex<Option<Arc<TdlibGateway>>>,
     connecting: AtomicBool,
     closing: AtomicBool,
@@ -64,6 +68,185 @@ struct AccountRuntime {
     forwarding: AtomicBool,
     sent_updates: Mutex<HashMap<String, String>>,
     unlocked_passphrase: Mutex<Option<String>>,
+}
+const PENDING_CONFIRM_AFTER: Duration = Duration::from_secs(30);
+#[derive(Clone)]
+struct PendingSend {
+    started_at: Instant,
+}
+impl Default for PendingSend {
+    fn default() -> Self {
+        Self {
+            started_at: Instant::now(),
+        }
+    }
+}
+#[derive(Clone, PartialEq, Eq)]
+struct PendingKey {
+    profile_id: String,
+    generation: u64,
+    key: String,
+}
+struct CloseApproval {
+    entries: Vec<PendingKey>,
+    created_at: Instant,
+}
+#[derive(Clone, Serialize)]
+struct CloseChallenge {
+    pending_count: usize,
+    retry_after_ms: u64,
+    token: Option<String>,
+}
+#[derive(Clone, Serialize)]
+struct UnknownSend {
+    profile_id: String,
+    generation: u64,
+    target: String,
+    old_message_id: String,
+    state: String,
+}
+fn pending_challenge(
+    global: &AppState,
+    runtimes: &[Arc<AccountRuntime>],
+) -> Result<CloseChallenge> {
+    let mut entries = Vec::new();
+    let mut wait = Duration::ZERO;
+    for s in runtimes {
+        if s.forwarding.load(Ordering::SeqCst) {
+            return Err("Forward submission in progress; wait before closing".into());
+        }
+        for (key, pending) in s.pending.lock().unwrap().iter() {
+            wait = wait.max(PENDING_CONFIRM_AFTER.saturating_sub(pending.started_at.elapsed()));
+            entries.push(PendingKey {
+                profile_id: s.profile_id.clone(),
+                generation: s.epoch.load(Ordering::SeqCst),
+                key: key.clone(),
+            });
+        }
+    }
+    let pending_count = entries.len();
+    let token = if pending_count > 0 && wait.is_zero() {
+        let token = global
+            .approval_sequence
+            .fetch_add(1, Ordering::SeqCst)
+            .to_string();
+        let mut approvals = global.close_approvals.lock().unwrap();
+        approvals.retain(|_, a| a.created_at.elapsed() < Duration::from_secs(300));
+        if approvals.len() >= 32 {
+            approvals.clear();
+        }
+        approvals.insert(
+            token.clone(),
+            CloseApproval {
+                entries,
+                created_at: Instant::now(),
+            },
+        );
+        Some(token)
+    } else {
+        None
+    };
+    Ok(CloseChallenge {
+        pending_count,
+        retry_after_ms: u64::try_from(wait.as_millis()).unwrap_or(u64::MAX),
+        token,
+    })
+}
+#[tauri::command]
+fn close_guard(s: State<AppState>, profile_id: Option<String>) -> Result<CloseChallenge> {
+    let _gate = s
+        .lifecycle
+        .try_read()
+        .map_err(|_| "Application transition in progress")?;
+    let runtimes = match profile_id {
+        Some(id) => vec![account(&s, &id)?],
+        None => accounts(&s),
+    };
+    pending_challenge(&s, &runtimes)
+}
+#[tauri::command]
+fn unknown_sends(s: State<AppState>) -> Vec<UnknownSend> {
+    accounts(&s)
+        .iter()
+        .flat_map(|r| r.unknown_sends.lock().unwrap().clone())
+        .collect()
+}
+fn authorize_close(
+    global: &AppState,
+    runtimes: &[Arc<AccountRuntime>],
+    token: Option<String>,
+) -> Result<Vec<UnknownSend>> {
+    let approval = match token {
+        Some(token) => Some(
+            global
+                .close_approvals
+                .lock()
+                .unwrap()
+                .remove(&token)
+                .ok_or("Close confirmation expired; review pending sends again")?,
+        ),
+        None => None,
+    };
+    // Same order as receiver updates. Hold every pending map until the complete
+    // snapshot is validated, so an invalid confirmation cannot partially resolve A.
+    let mut ordered: Vec<_> = runtimes.iter().collect();
+    ordered.sort_by_key(|r| &r.profile_id);
+    let mut updates: Vec<_> = ordered
+        .iter()
+        .map(|r| r.sent_updates.lock().unwrap())
+        .collect();
+    let mut pending: Vec<_> = ordered.iter().map(|r| r.pending.lock().unwrap()).collect();
+    for (r, sends) in ordered.iter().zip(&pending) {
+        if r.forwarding.load(Ordering::SeqCst) {
+            return Err("Forward submission in progress".into());
+        }
+        for (key, send) in sends.iter() {
+            if key.split_once(':').is_none() {
+                return Err("Invalid pending send key".into());
+            }
+            let approved = approval.as_ref().is_some_and(|a| {
+                a.created_at.elapsed() < Duration::from_secs(300)
+                    && a.entries.contains(&PendingKey {
+                        profile_id: r.profile_id.clone(),
+                        generation: r.epoch.load(Ordering::SeqCst),
+                        key: key.clone(),
+                    })
+            });
+            if !approved || send.started_at.elapsed() < PENDING_CONFIRM_AFTER {
+                return Err(
+                    "Pending sends require timeout and explicit close confirmation; review again"
+                        .into(),
+                );
+            }
+        }
+    }
+    let mut unknown = Vec::new();
+    for ((r, sends), sent_updates) in ordered.iter().zip(&mut pending).zip(&mut updates) {
+        for (key, _) in sends.drain() {
+            let (target, old_message_id) = key.split_once(':').ok_or("Invalid pending send key")?;
+            sent_updates.insert(key.clone(), "Unknown".into());
+            let event = UnknownSend {
+                profile_id: r.profile_id.clone(),
+                generation: r.epoch.load(Ordering::SeqCst),
+                target: target.into(),
+                old_message_id: old_message_id.into(),
+                state: "Unknown".into(),
+            };
+            r.unknown_sends.lock().unwrap().push(event.clone());
+            unknown.push(event);
+        }
+    }
+    Ok(unknown)
+}
+fn approve_and_emit(
+    app: &tauri::AppHandle,
+    runtimes: &[Arc<AccountRuntime>],
+    token: Option<String>,
+) -> Result<()> {
+    for event in authorize_close(&app.state::<AppState>(), runtimes, token)? {
+        let _ = app.emit("forward-update", event);
+    }
+    Ok(())
 }
 fn account(s: &AppState, id: &str) -> Result<Arc<AccountRuntime>> {
     if s.exiting.load(Ordering::SeqCst) {
@@ -203,6 +386,18 @@ fn update(app: &tauri::AppHandle, profile_id: &str, epoch: u64, v: Value) {
     if !current_epoch(&s, epoch) {
         return;
     }
+    if v["@type"] == "runtimeReceiverFailed" {
+        if let Some((_, cancel)) = s.active.lock().unwrap().as_ref() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        set_runtime_state(
+            app,
+            &s,
+            "Error",
+            "Shared TDLib receiver failed; pending requests failed immediately. Retry disconnect to safely close clients.",
+        );
+        return;
+    }
     if let Some((connection, ready)) = apply_connection(&s, epoch, &v) {
         let _ = app.emit("connection", connection);
         if ready {
@@ -273,6 +468,10 @@ fn update(app: &tauri::AppHandle, profile_id: &str, epoch: u64, v: Value) {
         let mut updates = s.sent_updates.lock().unwrap();
         updates.insert(format!("{target}:{old}"), state.into());
         s.pending.lock().unwrap().remove(&format!("{target}:{old}"));
+        s.unknown_sends
+            .lock()
+            .unwrap()
+            .retain(|u| !(u.generation == epoch && u.target == target && u.old_message_id == old));
         drop(updates);
         let _ = app.emit(
             "forward-update",
@@ -422,7 +621,11 @@ fn rebuild_accounts(app: &tauri::AppHandle) -> Result<()> {
     Ok(())
 }
 #[tauri::command]
-async fn save_settings(app: tauri::AppHandle, edit: SettingsEdit) -> Result<Snapshot> {
+async fn save_settings(
+    app: tauri::AppHandle,
+    edit: SettingsEdit,
+    close_confirmation: Option<String>,
+) -> Result<Snapshot> {
     background(move || {
         let s = app.state::<AppState>();
         let _lock = s
@@ -434,7 +637,7 @@ async fn save_settings(app: tauri::AppHandle, edit: SettingsEdit) -> Result<Snap
         }
         // Validate before interrupting any clients.
         Store::validate_settings(&edit.settings)?;
-        close_all(&app)?;
+        close_all(&app, close_confirmation)?;
         let snapshot = with_store(&s, |store| {
             // Preserve the latest UI preferences instead of writing the editor's stale snapshot.
             let mut settings = edit.settings;
@@ -462,14 +665,17 @@ fn save_layout(s: State<AppState>, left: f64, right: f64) -> Result<()> {
     })
 }
 #[tauri::command]
-async fn reset_settings(app: tauri::AppHandle) -> Result<Snapshot> {
+async fn reset_settings(
+    app: tauri::AppHandle,
+    close_confirmation: Option<String>,
+) -> Result<Snapshot> {
     background(move || {
         let s = app.state::<AppState>();
         let _lock = s
             .lifecycle
             .try_write()
             .map_err(|_| "Application transition in progress")?;
-        close_all(&app)?;
+        close_all(&app, close_confirmation)?;
         let snapshot = with_store(&s, |store| {
             store.reset()?;
             Ok(store.snapshot())
@@ -480,7 +686,11 @@ async fn reset_settings(app: tauri::AppHandle) -> Result<Snapshot> {
     .await
 }
 #[tauri::command]
-async fn clear_secret(app: tauri::AppHandle, key: String) -> Result<Snapshot> {
+async fn clear_secret(
+    app: tauri::AppHandle,
+    key: String,
+    close_confirmation: Option<String>,
+) -> Result<Snapshot> {
     background(move || {
         let s = app.state::<AppState>();
         let global_key = key == "api" || key == "proxy";
@@ -489,15 +699,10 @@ async fn clear_secret(app: tauri::AppHandle, key: String) -> Result<Snapshot> {
             .try_write()
             .map_err(|_| "Application transition in progress")?;
         if global_key {
-            close_all(&app)?;
+            close_all(&app, close_confirmation)?;
         }
         let snapshot = with_store(&s, |store| {
-            store.set_secret(&key, None)?;
-            if key == "proxy" {
-                let mut settings = store.settings();
-                settings.proxy_username.clear();
-                store.set_settings(settings)?;
-            }
+            store.clear_credential(&key)?;
             Ok(store.snapshot())
         })?;
         if global_key {
@@ -845,7 +1050,11 @@ async fn auth_submit(app: tauri::AppHandle, profile_id: String, value: String) -
     .await
 }
 #[tauri::command]
-async fn disconnect(app: tauri::AppHandle, profile_id: String) -> Result<()> {
+async fn disconnect(
+    app: tauri::AppHandle,
+    profile_id: String,
+    close_confirmation: Option<String>,
+) -> Result<()> {
     background(move || {
         let global = app.state::<AppState>();
         let _gate = global
@@ -857,6 +1066,7 @@ async fn disconnect(app: tauri::AppHandle, profile_id: String) -> Result<()> {
             .lifecycle
             .try_lock()
             .map_err(|_| "Session operation in progress")?;
+        approve_and_emit(&app, std::slice::from_ref(&s), close_confirmation)?;
         close_session(&app, &s, false)
     })
     .await
@@ -1010,6 +1220,120 @@ fn start_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn test_account(id: &str, age: Duration) -> Arc<AccountRuntime> {
+        let s = Arc::new(AccountRuntime {
+            profile_id: id.into(),
+            ..AccountRuntime::default()
+        });
+        s.pending.lock().unwrap().insert(
+            "10:20".into(),
+            PendingSend {
+                started_at: Instant::now() - age,
+            },
+        );
+        s
+    }
+    #[test]
+    fn pending_close_requires_timeout_and_single_use_scoped_confirmation() {
+        let global = AppState::default();
+        let a = test_account("A", Duration::ZERO);
+        let b = test_account("B", Duration::from_secs(31));
+        let challenge = pending_challenge(&global, std::slice::from_ref(&a)).unwrap();
+        assert_eq!(challenge.pending_count, 1);
+        assert!(challenge.retry_after_ms > 0);
+        assert!(challenge.token.is_none());
+        assert!(authorize_close(&global, std::slice::from_ref(&a), None).is_err());
+        a.pending
+            .lock()
+            .unwrap()
+            .get_mut("10:20")
+            .unwrap()
+            .started_at = Instant::now() - Duration::from_secs(31);
+        let challenge = pending_challenge(&global, std::slice::from_ref(&a)).unwrap();
+        let token = challenge.token.unwrap();
+        assert!(authorize_close(&global, std::slice::from_ref(&b), Some(token)).is_err());
+        assert_eq!(a.pending.lock().unwrap().len(), 1);
+        assert_eq!(b.pending.lock().unwrap().len(), 1);
+        let token = pending_challenge(&global, std::slice::from_ref(&a))
+            .unwrap()
+            .token
+            .unwrap();
+        let events =
+            authorize_close(&global, std::slice::from_ref(&a), Some(token.clone())).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].state, "Unknown");
+        assert_eq!(events[0].profile_id, "A");
+        assert!(a.pending.lock().unwrap().is_empty());
+        assert_eq!(b.pending.lock().unwrap().len(), 1);
+        assert_eq!(
+            a.sent_updates
+                .lock()
+                .unwrap()
+                .get("10:20")
+                .map(String::as_str),
+            Some("Unknown")
+        );
+        assert_eq!(a.unknown_sends.lock().unwrap().len(), 1);
+        assert!(authorize_close(&global, std::slice::from_ref(&a), Some(token)).is_err());
+        finish_close(&a, Ok(())).unwrap();
+        assert_eq!(a.unknown_sends.lock().unwrap().len(), 1);
+    }
+    #[test]
+    fn new_pending_or_new_generation_invalidates_confirmation_without_partial_resolution() {
+        let global = AppState::default();
+        let a = test_account("A", Duration::from_secs(31));
+        let b = Arc::new(AccountRuntime {
+            profile_id: "B".into(),
+            ..AccountRuntime::default()
+        });
+        let runtimes = vec![a.clone(), b.clone()];
+        let token = pending_challenge(&global, &runtimes).unwrap().token;
+        b.pending.lock().unwrap().insert(
+            "30:40".into(),
+            PendingSend {
+                started_at: Instant::now() - Duration::from_secs(31),
+            },
+        );
+        assert!(authorize_close(&global, &runtimes, token).is_err());
+        assert_eq!(a.pending.lock().unwrap().len(), 1);
+        assert!(a.unknown_sends.lock().unwrap().is_empty());
+        assert_eq!(b.pending.lock().unwrap().len(), 1);
+        let token = pending_challenge(&global, &runtimes).unwrap().token;
+        a.epoch.fetch_add(1, Ordering::SeqCst);
+        assert!(authorize_close(&global, &runtimes, token).is_err());
+        assert_eq!(b.pending.lock().unwrap().len(), 1);
+        assert!(b.unknown_sends.lock().unwrap().is_empty());
+        let token = pending_challenge(&global, &runtimes).unwrap().token;
+        a.forwarding.store(true, Ordering::SeqCst);
+        assert!(authorize_close(&global, &runtimes, token).is_err());
+        assert_eq!(a.pending.lock().unwrap().len(), 1);
+    }
+    #[test]
+    fn expired_confirmation_is_rejected_and_definitive_receipts_do_not_need_override() {
+        let global = AppState::default();
+        let a = test_account("A", Duration::from_secs(31));
+        let token = pending_challenge(&global, std::slice::from_ref(&a))
+            .unwrap()
+            .token
+            .unwrap();
+        global
+            .close_approvals
+            .lock()
+            .unwrap()
+            .get_mut(&token)
+            .unwrap()
+            .created_at = Instant::now() - Duration::from_secs(301);
+        assert!(authorize_close(&global, std::slice::from_ref(&a), Some(token)).is_err());
+        let token = pending_challenge(&global, std::slice::from_ref(&a))
+            .unwrap()
+            .token;
+        a.pending.lock().unwrap().clear();
+        assert!(
+            authorize_close(&global, std::slice::from_ref(&a), token)
+                .unwrap()
+                .is_empty()
+        );
+    }
     #[test]
     fn authorization_network_lock_errors_and_generations_are_orthogonal() {
         let a = AccountRuntime {
@@ -1105,7 +1429,7 @@ mod tests {
         a.pending
             .lock()
             .unwrap()
-            .insert("1:2".into(), "Pending".into());
+            .insert("1:2".into(), PendingSend::default());
         assert!(can_transition(&a).is_err());
         assert!(can_transition(&b).is_ok());
         clear_session(&a);
@@ -1149,7 +1473,7 @@ mod tests {
         s.pending
             .lock()
             .unwrap()
-            .insert("1:2".into(), "Pending".into());
+            .insert("1:2".into(), PendingSend::default());
         for label in ["settings", "other"] {
             route_window_close(label, || {
                 panic!("auxiliary close must never call the session exit handler")
@@ -1168,7 +1492,7 @@ mod tests {
         s.pending
             .lock()
             .unwrap()
-            .insert("1:2".into(), "Pending".into());
+            .insert("1:2".into(), PendingSend::default());
         assert!(can_transition(&s).is_err());
         clear_session(&s);
         assert!(can_transition(&s).is_err());
@@ -1310,7 +1634,9 @@ async fn forward_selected(
                 if item.state == "Pending"
                     && let Some(id) = &item.sent_id
                 {
-                    pending.insert(format!("{target}:{id}"), "Pending".into());
+                    pending
+                        .entry(format!("{target}:{id}"))
+                        .or_insert_with(PendingSend::default);
                 }
             }
             Ok(report)
@@ -1320,12 +1646,10 @@ async fn forward_selected(
     })
     .await
 }
-fn close_all(app: &tauri::AppHandle) -> Result<()> {
+fn close_all(app: &tauri::AppHandle, confirmation: Option<String>) -> Result<()> {
     let global = app.state::<AppState>();
     let runtimes = accounts(&global);
-    for s in &runtimes {
-        can_transition(s)?;
-    }
+    approve_and_emit(app, &runtimes, confirmation)?;
     // Submit every close before waiting, including locked clients.
     for s in &runtimes {
         s.closing.store(true, Ordering::SeqCst);
@@ -1370,7 +1694,11 @@ fn close_all(app: &tauri::AppHandle) -> Result<()> {
         Err(errors.join("; "))
     }
 }
-fn begin_safe_exit(app: &tauri::AppHandle) {
+#[tauri::command]
+fn exit_application(app: tauri::AppHandle, close_confirmation: Option<String>) {
+    begin_safe_exit(&app, close_confirmation);
+}
+fn begin_safe_exit(app: &tauri::AppHandle, close_confirmation: Option<String>) {
     let handle = app.clone();
     std::thread::spawn(move || {
         let s = handle.state::<AppState>();
@@ -1378,11 +1706,20 @@ fn begin_safe_exit(app: &tauri::AppHandle) {
             return;
         }
         let _lock = s.lifecycle.write().unwrap();
-        match close_all(&handle) {
+        match close_all(&handle, close_confirmation) {
             Ok(()) => handle.exit(0),
             Err(e) => {
                 s.exiting.store(false, Ordering::SeqCst);
-                let _ = handle.emit("app-error", e);
+                match pending_challenge(&s, &accounts(&s)) {
+                    Ok(challenge) if challenge.pending_count > 0 => {
+                        if let Some(main) = handle.get_webview_window("main") {
+                            let _ = main.emit("close-confirmation-required", challenge);
+                        }
+                    }
+                    _ => {
+                        let _ = handle.emit("app-error", e);
+                    }
+                }
             }
         }
     });
@@ -1403,7 +1740,7 @@ pub fn run() {
             if let tauri::WindowEvent::CloseRequested { api, .. } = event {
                 route_window_close(window.label(), || {
                     api.prevent_close();
-                    begin_safe_exit(window.app_handle());
+                    begin_safe_exit(window.app_handle(), None);
                 });
             }
         })
@@ -1421,6 +1758,9 @@ pub fn run() {
             remove_account,
             logout_account,
             connection_status,
+            close_guard,
+            unknown_sends,
+            exit_application,
             account_statuses,
             select_profile,
             connect,
@@ -1445,7 +1785,7 @@ pub fn run() {
                 .any(|r| r.gateway.lock().unwrap().is_some())
             {
                 api.prevent_exit();
-                begin_safe_exit(app);
+                begin_safe_exit(app, None);
             }
         }
     });
