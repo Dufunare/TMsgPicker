@@ -1,5 +1,30 @@
 # v0.1 实现与验收记录
 
+## 2026-10-14 常驻多账号 Runtime 重构
+
+本轮以本地 `review/stability-final-pass-20261013` 分支和干净工作区为基础，保留最新 UI。此前文档中的单活动账号／串行 Session 切换为历史行为，现行结构、状态机、最终数据模型、调用流程和手动验收以 [Runtime 架构与验收](RUNTIME_ARCHITECTURE.md) 为准，接口见 [IPC](IPC.md)。
+
+已实现：唯一 ApplicationConfigService、持久化 AccountRegistry、Profile 级 DPAPI 数据库口令、非破坏旧设置迁移、Legacy 原目录复用、进程共享接收器、Client 专属 Router、全部注册账号启动、未解锁 Client 保留、账号级初始化失败、重复身份冲突处理、并发安全关闭、全局配置统一重建、显式 Profile IPC 和事件、按账号缓存前端状态。切换视图不调用任何 TDLib 生命周期操作，后台查询继续，普通关闭仅 close，显式确认注销才 logOut。
+
+主要文件：`settings.rs`、`app.rs`、`tdlib/gateway.rs`、`gateway.rs`、`services.rs`、`useWorkspace.ts`、新增 `accountViews.ts`、账号／设置／聊天组件、`types.ts`、Rust 回归和新增 `tests/workspace.test.ts`。`core.rs` 和两个 bring-up CLI 保持原业务实现。
+
+| 验证 | 结果 |
+|---|---|
+| `cargo test --manifest-path src-tauri/Cargo.toml --no-default-features` | 29 项通过：8 项配置／账号测试 + 21 项业务／生命周期 mock 回归 |
+| `cargo test --manifest-path src-tauri/Cargo.toml --lib --tests --target-dir src-tauri/target/runtime-check` | 39 项通过：18 项 unit／原生 Runtime + 21 项集成回归；不使用真实 Session 或凭据 |
+| `cargo check --manifest-path src-tauri/Cargo.toml --all-targets` | 通过 |
+| `cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings` | 通过 |
+| `pnpm.cmd test` | 3 项前端测试通过，使用 Vue 内存渲染器和模拟 IPC |
+| `pnpm.cmd build` | TypeScript／Vite 生产构建通过 |
+| `pnpm.cmd tauri build --debug --no-bundle`，设置 CARGO_TARGET_DIR | 完整 Windows 桌面构建通过，产物为 `src-tauri/target/runtime-check/debug/tmsgpicker.exe`，依赖 DLL 已 staging |
+| `git diff --check` | 通过 |
+
+新增测试覆盖：多 Client 和唯一 receive loop、相同 tag 的隔离、账号更新顺序、单 Client 超时／关闭／Pending 失败、未知和已关闭 Client 迟到消息、Client 重建和并发关闭、授权／网络／Locked／Error 分离、旧 epoch／run 隔离、空注册表、不保存口令不创建数据库、独立 DPAPI 解密及局部失败、旧配置／Legacy 文件保留、重复身份不覆盖、close 与 logOut 的独立调用序列、A → B → A 只调用 select_profile、后台查询／发送隔离、授权无自动弹窗、全局重建 generation 的独立应用。39 项 Rust 与 3 项前端共 42 项独立测试；离线模式的 29 项属于其中的子集。
+
+原默认输出目录的 tmsgpicker.exe 正在运行，首次 `--lib --tests` 因 Windows 文件占用无法覆盖主程序。使用独立 target 目录完成完整测试与构建，没有结束现有进程或操作真实 appdata。开发过程中未删除现有数据库／Session／凭据，未推送或合并 main。
+
+人工未验证：真实多账号授权、SOCKS5 和网络故障、旧加密 Session 的实际复用、真实 getMe 冲突、真实消息发送及 Pending 更新、WebView2 视觉和窗口交互。请先正常关闭旧程序，再运行新产物，按 [本地手动验收步骤](RUNTIME_ARCHITECTURE.md#自动化验证与人工验收) 验证。没有制作或验证安装包。
+
 日期：2026-10-13。设计依据：[项目规范](TMsgPicker_PROJECT_SPEC.md) 第 9 节，加用户正式任务附件的补充要求。
 
 **状态：A–D 的应用代码已实现，离线核心及 Windows 原生生命周期通过自动化验证；真实账号端到端手工验收尚未执行。不能把编译成功视为真实登录/网络/转发已验收。**
@@ -72,3 +97,7 @@ TDLib 方法参数核对来源为 [官方 td_api.tl](https://github.com/tdlib/td
 修复为按序提交两条请求的 request_batch，随后先等待参数响应，再等待代理确认；参数错误或取消时通过 PendingRequest 的 Drop 清理其余路由槽位。原生回归使用本地 DLL 重现两种代理 API 的预初始化排队，并提交故意无效的 `api_id=0` 参数，确认立即报告参数错误而非等待代理超时；不提供真实凭据、不打开 Session 或发送消息。Mock 回归强制禁止在 bootstrap 中使用单条阻塞 request，覆盖启用代理、停用代理及失败。
 
 TDLib 状态分类和排队逻辑参见 [官方 Td.cpp](https://github.com/tdlib/td/blob/master/td/telegram/Td.cpp)：preauthentication 与 preinitialization 是不同阶段。真实 Clash 连通性仍须本机配置正确 SOCKS5/Mixed 端口后观察连接状态。
+
+## 三栏与多账号后续迭代
+
+2026-10-13：已完成设置、DPAPI、Profile/Legacy、串行会话切换与三栏 UI。新的交付与验收记录见 [UI_ACCOUNTS_ACCEPTANCE.md](UI_ACCOUNTS_ACCEPTANCE.md)；本页原有 v0.1 结果是历史记录，新的验证状态以该文档为准。

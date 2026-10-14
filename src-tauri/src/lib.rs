@@ -7,3 +7,4 @@ pub mod services;
 pub mod tdlib;
 #[cfg(feature = "desktop")]
 pub use app::run;
+pub mod settings;

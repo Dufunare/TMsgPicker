@@ -11,6 +11,11 @@ pub trait TelegramGateway: Send + Sync {
     fn request_batch(&self, requests: Vec<Value>, cancel: &AtomicBool) -> Result<Vec<Value>>;
 }
 
+pub trait SessionLifecycle: TelegramGateway {
+    fn begin_close(&self);
+    fn wait_closed(&self) -> Result<()>;
+}
+
 pub fn id(value: &str) -> Result<i64> {
     value.parse().map_err(|_| "Invalid Telegram ID".into())
 }

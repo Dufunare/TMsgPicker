@@ -1,6 +1,6 @@
 use crate::{
     core::MessageKey,
-    gateway::{Result, TelegramGateway, id},
+    gateway::{Result, SessionLifecycle, TelegramGateway, id},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,15 @@ pub struct ConnectConfig {
 }
 pub struct AuthService;
 impl AuthService {
+    pub fn end_session(g: &dyn SessionLifecycle, logout: bool) -> Result<()> {
+        if logout {
+            g.request(json!({"@type":"logOut"}), &AtomicBool::new(false))?;
+        } else {
+            g.begin_close();
+        }
+        // logOut advances TDLib's own closing states; never race it with close.
+        g.wait_closed()
+    }
     pub fn initialize(g: &dyn TelegramGateway, c: ConnectConfig, root: &Path) -> Result<()> {
         let cancel = AtomicBool::new(false);
         let api_id = c

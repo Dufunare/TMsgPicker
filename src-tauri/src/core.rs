@@ -5,6 +5,7 @@ use std::{
     cmp::Ordering,
     collections::{BTreeMap, HashSet},
     sync::atomic::{AtomicBool, Ordering as AtomicOrdering},
+    time::{Duration, Instant},
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -500,6 +501,10 @@ pub fn scan(
     let mut scanned = 0;
     let mut status = ScanStatus::Partial;
     let mut detail = "Scan budget reached".to_string();
+    // Rebuilding and serializing all candidates on every page is quadratic for large scans.
+    let mut last_progress: Option<Instant> = None;
+    // TDLib may temporarily return only the inclusive cursor while loading older history.
+    let mut stagnant_pages = 0_u8;
     while scanned < budget {
         if cancel.load(AtomicOrdering::Relaxed) {
             status = ScanStatus::Cancelled;
@@ -578,20 +583,34 @@ pub fn scan(
             break;
         }
         if next == 0 || (cursor != 0 && next >= cursor) {
+            // A short TDLib history page can contain just the inclusive cursor.
+            // Retry briefly rather than declaring the scan incomplete immediately.
+            // Remain bounded if history never advances.
+            if cursor != 0 && stagnant_pages < 2 {
+                stagnant_pages += 1;
+                std::thread::sleep(Duration::from_millis(120));
+                continue;
+            }
             status = ScanStatus::Partial;
-            detail = "History cursor made no progress".into();
+            detail = "History cursor made no progress after retries".into();
             break;
         }
+        stagnant_pages = 0;
         cursor = next;
-        progress(ScanResult {
-            run_id: run_id.clone(),
-            status: ScanStatus::Scanning,
-            scanned,
-            pages,
-            exact: false,
-            detail: "Scanning; ranking is provisional".into(),
-            posts: query(&collected, spec),
-        });
+        // Publish promptly after the first page, then at most twice per second.
+        // The final result is always sent by the caller regardless of throttling.
+        if last_progress.is_none_or(|at| at.elapsed() >= Duration::from_millis(500)) {
+            last_progress = Some(Instant::now());
+            progress(ScanResult {
+                run_id: run_id.clone(),
+                status: ScanStatus::Scanning,
+                scanned,
+                pages,
+                exact: false,
+                detail: "Scanning; ranking is provisional".into(),
+                posts: query(&collected, spec),
+            });
+        }
     }
     if cancel.load(AtomicOrdering::Relaxed) {
         status = ScanStatus::Cancelled;

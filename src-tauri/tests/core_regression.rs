@@ -8,7 +8,7 @@ use std::{
 };
 use tmsgpicker_lib::{
     core::*,
-    gateway::{Result, TelegramGateway},
+    gateway::{Result, SessionLifecycle, TelegramGateway},
     services::{ActionService, AuthService, ConnectConfig, ProxyConfig},
 };
 
@@ -16,6 +16,33 @@ struct MockTelegramGateway {
     pages: Mutex<VecDeque<Result<Value>>>,
     requests: Mutex<Vec<Value>>,
     cancel_history: bool,
+}
+impl SessionLifecycle for MockTelegramGateway {
+    fn begin_close(&self) {
+        self.requests.lock().unwrap().push(json!({"@type":"close"}));
+    }
+    fn wait_closed(&self) -> Result<()> {
+        self.requests
+            .lock()
+            .unwrap()
+            .push(json!({"@type":"waitClosed"}));
+        Ok(())
+    }
+}
+#[test]
+fn normal_close_and_explicit_logout_have_distinct_lifecycles() {
+    for (logout, expected) in [(false, "close"), (true, "logOut")] {
+        let g = MockTelegramGateway::pages(Vec::new());
+        AuthService::end_session(&g, logout).unwrap();
+        let calls = g.requests.lock().unwrap();
+        assert_eq!(
+            calls
+                .iter()
+                .map(|v| v["@type"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec![expected, "waitClosed"]
+        );
+    }
 }
 impl MockTelegramGateway {
     fn pages(pages: Vec<Value>) -> Self {
@@ -257,7 +284,12 @@ fn duplicate_cursor_empty_and_no_progress_are_distinct() {
     let r = scan(&g, &spec(50), "a".into(), &AtomicBool::new(false), |_| {}).unwrap();
     assert_eq!(r.scanned, 2);
     assert_eq!(r.status, ScanStatus::Complete);
-    let g = MockTelegramGateway::pages(vec![page(vec![message(100)]), page(vec![message(100)])]);
+    let g = MockTelegramGateway::pages(vec![
+        page(vec![message(100)]),
+        page(vec![message(100)]),
+        page(vec![message(100)]),
+        page(vec![message(100)]),
+    ]);
     let r = scan(&g, &spec(50), "a".into(), &AtomicBool::new(false), |_| {}).unwrap();
     assert_eq!(r.status, ScanStatus::Partial);
     assert!(!r.exact);
@@ -698,4 +730,46 @@ fn proxy_and_no_proxy_bootstrap_submit_parameters_without_waiting_for_proxy() {
         std::fs::remove_dir(root.join("files")).unwrap();
         std::fs::remove_dir(root).unwrap();
     }
+}
+
+#[test]
+fn transient_cursor_only_pages_are_retried_before_marking_partial() {
+    let g = MockTelegramGateway::pages(vec![
+        page(vec![message(100)]),
+        page(vec![message(100)]),
+        page(vec![message(100), message(99)]),
+    ]);
+    let r = scan(
+        &g,
+        &spec(2),
+        "retry".into(),
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(r.scanned, 2);
+    assert_eq!(r.status, ScanStatus::Complete);
+    assert_eq!(r.pages, 3);
+}
+
+#[test]
+fn permanently_stagnant_cursor_is_bounded() {
+    let g = MockTelegramGateway::pages(vec![
+        page(vec![message(100)]),
+        page(vec![message(100)]),
+        page(vec![message(100)]),
+        page(vec![message(100)]),
+        page(vec![message(99)]),
+    ]);
+    let r = scan(
+        &g,
+        &spec(2),
+        "retry".into(),
+        &AtomicBool::new(false),
+        |_| {},
+    )
+    .unwrap();
+    assert_eq!(r.status, ScanStatus::Partial);
+    assert_eq!(r.scanned, 1);
+    assert_eq!(r.pages, 4);
 }
