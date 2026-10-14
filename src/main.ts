@@ -5,6 +5,7 @@ import LoginPage from './LoginPage.vue';
 import { initializeAppearance } from './theme/appearance';
 import './theme/tokens.css';
 import './theme/components.css';
+import './theme/appearance-settings.css';
 import './workspace.css';
 
 void initializeAppearance();
