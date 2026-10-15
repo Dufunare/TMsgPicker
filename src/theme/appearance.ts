@@ -14,12 +14,13 @@ export type Appearance = {
   glass_opacity?: number;
   glass_blur?: number;
   spacing?: number;
+  image_preview_size?: number;
 };
 
 export const defaultAppearance: Appearance = {
   theme: 'system', accent: '#4277cf', density: 'comfortable',
   radius: 12, font_scale: 100, elevation: 'soft', scrollbar: 'slim',
-  glass_opacity: 48, glass_blur: 30, spacing: 100,
+  glass_opacity: 48, glass_blur: 30, spacing: 100, image_preview_size:250,
 };
 
 const current = reactive<Appearance>({ ...defaultAppearance });
@@ -61,6 +62,7 @@ export function validAppearance(input: unknown): input is Appearance {
     && ['slim', 'standard'].includes(String(a.scrollbar))
     && (a.glass_opacity === undefined || (Number.isInteger(a.glass_opacity) && (a.glass_opacity as number) >= 20 && (a.glass_opacity as number) <= 90))
     && (a.glass_blur === undefined || (Number.isInteger(a.glass_blur) && (a.glass_blur as number) >= 0 && (a.glass_blur as number) <= 60))
+    && (a.image_preview_size === undefined || (Number.isInteger(a.image_preview_size) && (a.image_preview_size as number)>=120 && (a.image_preview_size as number)<=520))
     && (a.spacing === undefined || (Number.isInteger(a.spacing) && (a.spacing as number) >= 75 && (a.spacing as number) <= 140));
 }
 
@@ -85,6 +87,7 @@ export function applyAppearance(next: Appearance) {
   root.style.setProperty('--scrollbar-width', next.scrollbar === 'slim' ? '7px' : '11px');
   root.style.setProperty('--glass-opacity', String((resolved.glass_opacity ?? 48) / 100));
   root.style.setProperty('--glass-blur', `${resolved.glass_blur ?? 30}px`);
+  root.style.setProperty('--image-preview-size',`${resolved.image_preview_size ?? 250}px`);
   root.style.setProperty('--spacing-scale', String((resolved.spacing ?? 100) / 100));
   if (isTauri()) document.documentElement.dataset.desktop = 'true';
 }
