@@ -224,6 +224,8 @@ pub struct Chat {
     pub archived: bool,
     #[serde(default)]
     pub photo_file_id: Option<i32>,
+    #[serde(default)]
+    pub photo_minithumbnail: Option<String>,
 }
 
 #[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -249,6 +251,9 @@ impl ChatService {
             kind: v["type"]["@type"].as_str().unwrap_or("unknown").into(),
             archived,
             photo_file_id: v["photo"]["small"]["id"].as_i64().and_then(|id| i32::try_from(id).ok()).filter(|id| *id > 0),
+            photo_minithumbnail: v["photo"]["minithumbnail"]["data"].as_str()
+                .filter(|value|value.len()<16_384&&value.chars().all(|c|c.is_ascii_alphanumeric()||matches!(c,'+'|'/'|'=')))
+                .map(|value|format!("data:image/jpeg;base64,{value}")),
         })
     }
 
