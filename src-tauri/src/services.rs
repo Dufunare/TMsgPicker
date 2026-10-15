@@ -350,7 +350,7 @@ impl ChatService {
     ) -> Result<Option<String>> {
         if file_id <= 0 { return Ok(None); }
         let cancel = AtomicBool::new(false);
-        let limit = if full { 12 * 1024 * 1024 } else { 2 * 1024 * 1024 };
+        let limit = if full { 24 * 1024 * 1024 } else { 2 * 1024 * 1024 };
         let file = g.request(json!({"@type":"downloadFile","file_id":file_id,
             "priority":if full {16} else {3},"offset":0,"limit":0,"synchronous":true}), &cancel)?;
         if file["local"]["is_downloading_completed"] != true { return Ok(None); }

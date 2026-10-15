@@ -135,8 +135,9 @@ pub fn normalize(v: &Value) -> Result<TelegramMessage> {
         // the returned format and the tiny JPEG serves only as a loading fallback.
         thumbnail_file_id: match kind {
             "messagePhoto" => photo_file(&content["photo"], false),
-            "messageVideo" => td_file_id(&content["video"]["thumbnail"]["file"])
-                .or_else(|| photo_file(&content["cover"], false)),
+            "messageVideo" => photo_file(&content["cover"], true)
+                .or_else(|| photo_file(&content["video"]["cover"], true))
+                .or_else(|| td_file_id(&content["video"]["thumbnail"]["file"])),
             "messageAnimation" => td_file_id(&content["animation"]["thumbnail"]["file"]),
             "messageDocument" => td_file_id(&content["document"]["thumbnail"]["file"]),
             "messageVideoNote" => td_file_id(&content["video_note"]["thumbnail"]["file"]),
@@ -585,7 +586,7 @@ pub fn scan(
         };
         let page_limit = (needed + usize::from(cursor != 0))
             .min(budget - scanned + usize::from(cursor != 0))
-            .min(100).max(1);
+            .clamp(1, 100);
         let response=match gateway.request(json!({"@type":"getChatHistory","chat_id":chat,"from_message_id":cursor,"offset":0,"limit":page_limit,"only_local":false}),cancel) {
             Ok(v)=>v,Err(e)=>{status=if cancel.load(AtomicOrdering::Relaxed) {ScanStatus::Cancelled} else {ScanStatus::Error};detail=e;break;}
         };
@@ -656,13 +657,12 @@ pub fn scan(
             }
             let finishes_single = m.media_album_id.is_none();
             collected.push(m);
-            if let Some(target) = recent_target {
-                if logical_seen.len() == target && finishes_single {
-                    status = ScanStatus::Complete;
-                    detail = "Recent logical-post scope complete".into();
-                    reached = true;
-                    break;
-                }
+            if let Some(target) = recent_target
+                && logical_seen.len() == target && finishes_single {
+                status = ScanStatus::Complete;
+                detail = "Recent logical-post scope complete".into();
+                reached = true;
+                break;
             }
             if scanned >= budget {
                 if recent_target.is_some() {
