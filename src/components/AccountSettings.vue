@@ -2,7 +2,7 @@
 import {computed} from 'vue';
 import {useWorkspaceContext} from '../useWorkspace';
 import {accountStatus} from '../accountViews';
-import AppSelect from './AppSelect.vue';
+import AvatarPreview from './AvatarPreview.vue';
 const {snapshot,profileId,connection,accountError,notice,busy,resetBusy,passphrase,authLabel,authValue,connect,submitAuth,disconnect,logoutAccount,addAccount,selectAccount}=useWorkspaceContext();
 const profile=computed(()=>snapshot.value?.profiles.find(p=>p.profile_id===profileId.value));
 const needsPassword=computed(()=>connection.value.runtime_state==='NeedsDatabasePassphrase'||(connection.value.user_disconnected&&!profile.value?.has_saved_database_secret)||connection.value.runtime_state==='Error');
@@ -12,7 +12,7 @@ const needsPassword=computed(()=>connection.value.runtime_state==='NeedsDatabase
   <p v-if="accountError" class="error" role="alert">{{accountError}}</p><p v-if="notice" class="notice">{{notice}}</p>
   <section class="settings-card" aria-labelledby="account-info-title">
   <h3 id="account-info-title">账号信息</h3>
-  <label v-if="snapshot?.profiles.length">当前设置的账号<AppSelect :model-value="profileId" :disabled="busy||resetBusy" label="当前设置的账号" :options="snapshot.profiles.map(account=>({value:account.profile_id,label:account.display_name}))" @update:model-value="profileId=String($event);selectAccount()"/></label>
+  <div v-if="profile" class="settings-account-badge"><span>{{profile.display_name}}</span><AvatarPreview account :profile-id="profileId" :generation="connection.generation" :name="profile.display_name" size="sm"/></div>
   <template v-if="!profile"><p class="muted">{{snapshot?.profiles.length?'请选择要设置的账号。':'尚未添加 Telegram 账号。'}}</p><button @click="addAccount">添加新账号</button></template>
   <template v-else>
     <p class="settings-identity">{{profile.display_name}}</p><p v-if="profile.username">@{{profile.username}}</p><p class="muted">Telegram User ID：{{profile.telegram_user_id}}<br>{{accountStatus(connection)}} · {{connection.detail}}</p>
