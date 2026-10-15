@@ -10,6 +10,9 @@ test('all application windows use frameless chrome and explicit window capabilit
   for(const label of ['main','settings','login'])assert.ok(capability.windows.includes(label));
   for(const permission of ['close','minimize','toggle-maximize','start-dragging','is-maximized'])
     assert.ok(capability.permissions.includes('core:window:allow-'+permission));
+  // Resize is listened to via Tauri events, not a window command permission.
+  assert.ok(!capability.permissions.includes('core:window:allow-on-resized'));
+  assert.match(read('src/window/windowControls.ts'),/window\.onResized\(/);
   assert.match(read('src-tauri/src/app.rs'),/\.decorations\(false\)/);
 });
 
