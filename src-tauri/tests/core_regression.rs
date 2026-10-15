@@ -767,11 +767,7 @@ fn configurable_preset_and_kleene_not_and_or() {
                 FilterExpr::IsNull {
                     field: Field::ReplyInfo,
                 },
-                cmp(
-                    Field::PostKind,
-                    CompareOp::Eq,
-                    Scalar::Text("single".into()),
-                ),
+                FilterExpr::ContainsContent {content_kind:"text".into(),exists:true},
             ],
         }),
     };
@@ -1227,4 +1223,44 @@ fn account_media_accepts_tdlib_owned_file_and_database_cache_but_denies_external
     let forbidden=MediaMock{path:outside.to_string_lossy().into_owned()};
     assert!(ChatService::media_data(&forbidden,1,&session.join("files"),false).is_err());
     std::fs::remove_dir_all(tmp).unwrap();
+}
+
+#[test]
+fn post_metrics_choose_max_views_forwards_and_caption_owner_interactions() {
+    let mut a=normalize(&message(100)).unwrap();
+    let mut b=normalize(&message(101)).unwrap();
+    let mut c=normalize(&message(102)).unwrap();
+    for m in [&mut a,&mut b,&mut c] {m.media_album_id=Some("400".into());m.text.clear();m.content_kind="photo".into();}
+    b.text="Caption".into();
+    a.metrics.views=Some(100);b.metrics.views=Some(85);c.metrics.views=Some(150);
+    a.metrics.forwards=Some(20);b.metrics.forwards=Some(9);c.metrics.forwards=Some(15);
+    a.metrics.reply_info=Some(100);b.metrics.reply_info=Some(7);c.metrics.reply_info=Some(44);
+    a.metrics.reactions=Some(vec![]);b.metrics.reactions=None;c.metrics.reactions=Some(vec![]);
+    let post=&assemble(&[a,b,c])[0];
+    assert_eq!(post.metrics.views,Some(150));
+    assert_eq!(post.metrics.forwards,Some(20));
+    assert_eq!(post.metrics.reply_info,Some(7));
+    assert!(post.metrics.reactions.is_none());
+    assert_eq!(post.text,"Caption");
+    assert_eq!(post.provenance["views"],"102");
+    assert_eq!(post.provenance["forwards"],"100");
+    assert_eq!(post.provenance["reactions"],"101");
+}
+#[test]
+fn combined_content_predicates_apply_to_entire_post() {
+    let mut a=normalize(&message(100)).unwrap();
+    let mut b=normalize(&message(101)).unwrap();
+    for m in [&mut a,&mut b]{m.media_album_id=Some("40".into());}
+    a.content_kind="video".into();b.content_kind="document".into();
+    let post=&assemble(&[a,b])[0];
+    let filter=FilterExpr::And{items:vec![
+        FilterExpr::ContainsContent{content_kind:"video".into(),exists:true},
+        FilterExpr::ContainsContent{content_kind:"photo".into(),exists:false},
+    ]};
+    assert_eq!(evaluate(post,&filter),Truth::True);
+    assert_eq!(evaluate(post,&FilterExpr::ContainsContent{content_kind:"document".into(),exists:false}),Truth::False);
+    let spec=QuerySpec{filter, ..spec(10)};
+    assert!(spec.validate().is_ok());
+    let invalid=QuerySpec{filter:FilterExpr::ContainsContent{content_kind:"garbage".into(),exists:true}, ..spec(10)};
+    assert!(invalid.validate().is_err());
 }
