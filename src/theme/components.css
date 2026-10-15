@@ -185,3 +185,18 @@ html.media-view .native-image-viewer {margin:0;max-width:none;}
 
 .media-video-cover img,.media-video-cover video {display:block;width:100%;height:100%;max-height:none;object-fit:cover;}
 .media-video-cover video {pointer-events:none;}
+
+/* Post media member metrics are independent of the Post-wide aggregate. */
+.media-preview {position:relative;isolation:isolate;}
+.member-metric-overlay {position:absolute;right:6px;bottom:6px;z-index:3;display:flex;align-items:center;gap:8px;padding:4px 7px;border-radius:7px;background:rgba(12,18,28,.76);color:#fff;font-size:10px;font-variant-numeric:tabular-nums;opacity:0;transform:translateY(4px);transition:opacity .2s ease,transform .2s ease;pointer-events:none;}
+.member-metric-overlay.is-visible {opacity:1;transform:translateY(0);}
+.member-metric-overlay span {display:inline-flex;align-items:center;gap:3px;}
+.member-metric-overlay .ui-icon {width:12px;height:12px;}
+.settings-account-badge {float:right;display:flex;align-items:center;gap:10px;max-width:75%;padding:4px 7px;border-radius:calc(var(--radius)*.75);background:var(--surface-muted);color:var(--text-strong);font-weight:600;}
+.settings-account-badge span {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.account-tools {display:grid;grid-template-columns:repeat(3,29px);align-items:center;justify-items:center;gap:0;}
+.account-tools>.icon-button,.account-tools>.account-switch,.account-tools>.account-menu {width:29px;height:29px;display:grid;place-items:center;margin:0;padding:0;}
+.account-tools .account-switch:hover,.account-tools .account-switch:focus-within {background:transparent;outline:none;}
+.account-tools .account-switch .app-select,.account-tools .account-switch .app-select-trigger {width:29px;height:29px;display:flex;align-items:center;justify-content:center;box-sizing:border-box;padding:0;margin:0;}
+.account-tools .account-switch .app-select-chevron {display:grid;place-items:center;width:18px;height:18px;flex:0 0 18px;margin:0;}
+.account-tools .account-switch .app-select-chevron svg {display:block;margin:0;}
