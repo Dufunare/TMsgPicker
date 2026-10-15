@@ -356,9 +356,20 @@ impl ChatService {
         if file["local"]["is_downloading_completed"] != true { return Ok(None); }
         let Some(path) = file["local"]["path"].as_str() else { return Ok(None) };
         if path.is_empty() { return Ok(None); }
-        let resolved = std::fs::canonicalize(path).map_err(|_| "Media unavailable")?;
-        let root = std::fs::canonicalize(files_root).map_err(|_| "Media root unavailable")?;
-        if !resolved.starts_with(root) { return Err("Media path outside current Session".into()); }
+        // TDLib may return files in the Session file cache or database cache.
+        // Both are account-owned. Canonicalize first to reject symlinks escaping the Session.
+        let session = files_root.parent().ok_or("Invalid Session files directory")?;
+        let canonical_session = std::fs::canonicalize(session).map_err(|_| "Session root unavailable")?;
+        let path = Path::new(path);
+        let resolved = if path.is_absolute() {
+            std::fs::canonicalize(path)
+        } else {
+            std::fs::canonicalize(files_root.join(path))
+                .or_else(|_| std::fs::canonicalize(session.join(path)))
+        }.map_err(|_| "Media unavailable")?;
+        if !resolved.starts_with(&canonical_session) || !resolved.is_file() {
+            return Err("Media path outside current Session".into());
+        }
         if std::fs::metadata(&resolved).map_err(|_| "Media metadata unavailable")?.len() > limit {
             return Ok(None);
         }
