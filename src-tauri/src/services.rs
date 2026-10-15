@@ -326,10 +326,10 @@ impl ChatService {
                 }
                 if seen.insert(chat.id.clone()) {
                     out.push(chat);
-                } else if is_archive {
-                    if let Some(old) = out.iter_mut().find(|item| item.id == chat.id) {
-                        old.archived = true;
-                    }
+                } else if is_archive
+                    && let Some(old) = out.iter_mut().find(|item| item.id == chat.id)
+                {
+                    old.archived = true;
                 }
             }
         }
