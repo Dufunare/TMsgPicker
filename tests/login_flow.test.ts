@@ -18,7 +18,7 @@ async function makeLogin(transport:Parameters<typeof useLogin>[0]){
 async function wizard(login:ReturnType<typeof useLogin>){
   const url=new URL('../src/components/LoginWizard.vue',import.meta.url);
   const {descriptor}=parse(await readFile(url,'utf8'));
-  const source=compileScript(descriptor,{id:'login-acceptance',inlineTemplate:true}).content.replace(/import \{\s*useLogin\s*\} from ['"]\.\.\/useLogin['"];?/,"import {inject} from 'vue';const useLogin=()=>inject('synthetic-login');");
+  const source=compileScript(descriptor,{id:'login-acceptance',inlineTemplate:true}).content.replace(/import \{\s*useLogin\s*\} from ['"]\.\.\/useLogin['"];?/,"import {inject} from 'vue';const useLogin=()=>inject('synthetic-login');").replace(/import AppSelect from [^;]+;/,"const AppSelect={render(){return null;}};");
   const temporary=new URL(`.login-acceptance-${process.pid}.mjs`,url);
   await writeFile(temporary,ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText);
   try {const component=(await import(temporary.href)).default;return await renderToString(createSSRApp({setup(){provide('synthetic-login',login);return()=>h(component);}}));}
