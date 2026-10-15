@@ -1286,17 +1286,27 @@ async fn photo_thumbnail(
         let _lock = runtime.lifecycle.try_lock().map_err(|_| "Session operation in progress")?;
         // TDLib file IDs are process-scoped. Never accept a path or arbitrary URL from WebView.
         let g = gateway(&runtime)?;
+        let mut fallback: Option<String> = None;
         let id = match file_id {
             Some(id) => id,
             None => {
                 let me = g.request(json!({"@type":"getMe"}), &AtomicBool::new(false))?;
-                let Some(id) = me["profile_photo"]["small"]["id"].as_i64().and_then(|id| i32::try_from(id).ok()) else { return Ok(None) };
+                fallback = me["profile_photo"]["minithumbnail"]["data"].as_str()
+                    .filter(|data|data.len()<16_384 && data.chars().all(|c|c.is_ascii_alphanumeric()||matches!(c,'+'|'/'|'=')))
+                    .map(|data|format!("data:image/jpeg;base64,{data}"));
+                let Some(id) = me["profile_photo"]["small"]["id"].as_i64().and_then(|id| i32::try_from(id).ok()) else {return Ok(fallback)};
                 id
             }
         };
         // File content is only read from this account's TDLib-managed files directory.
         let root = with_store(&global, |store| Ok(store.session_root(&profile_id)?))?;
-        ChatService::thumbnail(g.as_ref(), i64::from(id), &root.join("files"))
+        match ChatService::thumbnail(g.as_ref(), i64::from(id), &root.join("files")) {
+            Ok(Some(photo)) => Ok(Some(photo)),
+            // A small TDLib minithumbnail is preferable to an empty account card
+            // while a larger photo is temporarily unavailable.
+            Ok(None) | Err(_) if fallback.is_some() => Ok(fallback),
+            other => other,
+        }
     }).await
 }
 #[tauri::command]
