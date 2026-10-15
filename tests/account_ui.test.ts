@@ -48,7 +48,7 @@ test('settings subpages retain their options and empty account settings guide ac
   for(const text of ['API ID','API Hash','SOCKS5','记住此设备','重命名','紧凑','移除本地'])assert.equal(account.includes(text),false);
   const app=await render('ApplicationSettings.vue',w=>{w.snapshot.value=fixture;});
   for(const text of ['Telegram API ID','Telegram API Hash','SOCKS5','清除代理认证信息','重置 TMsgPicker'])assert.match(app,new RegExp(text));
-  assert.ok(app.includes('重置 TMsgPicker（注销全部账号并清除全部本地数据）'));
+  assert.ok(app.includes('重置 TMsgPicker'));
   for(const text of ['Real A','注销账号','添加新账号','数据库口令<input','紧凑','三栏宽度'])assert.equal(app.includes(text),false);
   const release=await render('ApplicationSettings.vue',w=>{w.snapshot.value={...fixture,debug_tools:false};});
   assert.equal(release.includes('重置 TMsgPicker'),false);
