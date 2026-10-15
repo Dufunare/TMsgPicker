@@ -129,3 +129,18 @@ select {
 .account-switch .app-select-menu {left:auto;right:0;width:230px;max-height:300px;text-align:left;font-size:12px;}
 .filter-node .app-select {flex:1 1 88px;min-width:88px;}
 .filter-node .app-select-trigger {width:100%;font-size:11px;}
+
+.app-date-time {position:relative;width:100%;min-width:0;}
+.app-date-time .app-select-trigger {width:100%;min-height:var(--control-height);background:var(--field);font-weight:450;}
+.app-date-time .app-select-trigger>span {color:var(--accent);}
+.app-calendar {position:absolute;top:calc(100% + 5px);left:0;z-index:45;width:290px;max-width:min(290px,90vw);padding:12px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow-popover);}
+.calendar-heading {display:flex;align-items:center;justify-content:space-between;margin-bottom:9px;}
+.calendar-heading button {min-height:26px;height:26px;padding:0 9px;}
+.calendar-grid {display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:3px;text-align:center;align-items:center;}
+.calendar-grid button {min-height:30px;height:30px;padding:0;border:0;background:transparent;font-size:12px;}
+.calendar-grid button:hover {background:var(--hover);}
+.calendar-grid .chosen-day {background:var(--accent-soft);color:var(--accent);font-weight:700;}
+.calendar-grid .muted {font-size:11px;}
+.calendar-time {display:flex;gap:12px;margin-top:11px;padding-top:8px;border-top:1px solid var(--border-subtle);}
+.calendar-time label {display:flex;flex:1;flex-direction:row;align-items:center;gap:6px;margin:0;}
+.calendar-time input {width:100%;min-width:0;}
