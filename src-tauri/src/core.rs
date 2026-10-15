@@ -41,9 +41,42 @@ pub struct TelegramMessage {
     pub content_kind: String,
     pub text: String,
     pub metrics: InteractionMetrics,
+    #[serde(default)]
+    pub thumbnail_file_id: Option<i32>,
+    #[serde(default)]
+    pub full_file_id: Option<i32>,
+    #[serde(default)]
+    pub minithumbnail: Option<String>,
 }
 fn numeric(v: &Value) -> Option<i64> {
     v.as_i64().or_else(|| v.as_str()?.parse().ok())
+}
+/// Choose the most appropriate size for a list thumbnail or a full-screen image.
+fn photo_file(photo: &Value, largest: bool) -> Option<i32> {
+    photo["sizes"].as_array()?
+        .iter()
+        .filter_map(|s| {
+            let id = i32::try_from(numeric(&s["photo"]["id"])?).ok()?;
+            let area = numeric(&s["width"])?.saturating_mul(numeric(&s["height"])?);
+            (id > 0 && area > 0).then_some((id, area))
+        })
+        .reduce(|a, b| {
+            if largest {
+                if b.1 > a.1 { b } else { a }
+            } else if (b.1 - 320 * 320).abs() < (a.1 - 320 * 320).abs() {
+                b
+            } else { a }
+        })
+        .map(|(id, _)| id)
+}
+fn td_file_id(file: &Value) -> Option<i32> {
+    i32::try_from(numeric(&file["id"])?).ok().filter(|id| *id > 0)
+}
+fn mini_uri(value: &Value) -> Option<String> {
+    let data = value["data"].as_str()?;
+    (data.len() <= 16_384 && !data.is_empty()
+        && data.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'+' | b'/' | b'=')))
+        .then(|| format!("data:image/jpeg;base64,{data}"))
 }
 pub fn normalize(v: &Value) -> Result<TelegramMessage> {
     let chat = numeric(&v["chat_id"]).ok_or("Message has no chat ID")?;
@@ -98,6 +131,33 @@ pub fn normalize(v: &Value) -> Result<TelegramMessage> {
             .or_else(|| content["caption"]["text"].as_str())
             .unwrap_or("")
             .into(),
+        // Real TDLib video thumbnails are not always JPEG; the media loader sniffs
+        // the returned format and the tiny JPEG serves only as a loading fallback.
+        thumbnail_file_id: match kind {
+            "messagePhoto" => photo_file(&content["photo"], false),
+            "messageVideo" => photo_file(&content["cover"], true)
+                .or_else(|| photo_file(&content["video"]["cover"], true))
+                .or_else(|| td_file_id(&content["video"]["thumbnail"]["file"])),
+            "messageAnimation" => td_file_id(&content["animation"]["thumbnail"]["file"]),
+            "messageDocument" => td_file_id(&content["document"]["thumbnail"]["file"]),
+            "messageVideoNote" => td_file_id(&content["video_note"]["thumbnail"]["file"]),
+            "messageSticker" => td_file_id(&content["sticker"]["thumbnail"]["file"]),
+            _ => None,
+        },
+        full_file_id: match kind {
+            "messagePhoto" => photo_file(&content["photo"], true),
+            "messageVideo" => td_file_id(&content["video"]["video"]),
+            "messageAnimation" => td_file_id(&content["animation"]["animation"]),
+            _ => None,
+        },
+        minithumbnail: match kind {
+            "messagePhoto" => mini_uri(&content["photo"]["minithumbnail"]),
+            "messageVideo" => mini_uri(&content["video"]["minithumbnail"])
+                .or_else(|| mini_uri(&content["cover"]["minithumbnail"])),
+            "messageAnimation" => mini_uri(&content["animation"]["minithumbnail"]),
+            "messageDocument" => mini_uri(&content["document"]["minithumbnail"]),
+            _ => None,
+        },
         metrics: InteractionMetrics {
             views: numeric(&info["view_count"]),
             forwards: numeric(&info["forward_count"]),
@@ -490,10 +550,17 @@ pub fn scan(
 ) -> Result<ScanResult> {
     spec.validate()?;
     let chat = id(&spec.chat_id)?;
+    // A recent count is a number of logical posts: a media album is one post.
+    // A separate, bounded raw-message guard allows completing an album at N.
+    let recent_target = match spec.scope {
+        Scope::Recent { count } => Some(count),
+        Scope::Dates { .. } => None,
+    };
     let budget = match spec.scope {
-        Scope::Recent { count } => count,
+        Scope::Recent { count } => count.saturating_mul(10).saturating_add(32).min(100_000),
         Scope::Dates { budget, .. } => budget,
     };
+    let mut logical_seen = HashSet::new();
     let mut seen = HashSet::new();
     let mut collected = Vec::new();
     let mut cursor = 0_i64;
@@ -512,7 +579,14 @@ pub fn scan(
             break;
         }
         // Reserve a slot for the inclusive cursor so a remaining budget of 1 can progress.
-        let page_limit = (budget - scanned + usize::from(cursor != 0)).min(100);
+        let needed = match recent_target {
+            Some(n) if logical_seen.len() >= n => 12, // finish the final media group
+            Some(n) => n - logical_seen.len(),
+            None => budget - scanned,
+        };
+        let page_limit = (needed + usize::from(cursor != 0))
+            .min(budget - scanned + usize::from(cursor != 0))
+            .clamp(1, 100);
         let response=match gateway.request(json!({"@type":"getChatHistory","chat_id":chat,"from_message_id":cursor,"offset":0,"limit":page_limit,"only_local":false}),cancel) {
             Ok(v)=>v,Err(e)=>{status=if cancel.load(AtomicOrdering::Relaxed) {ScanStatus::Cancelled} else {ScanStatus::Error};detail=e;break;}
         };
@@ -552,9 +626,20 @@ pub fn scan(
             if next == 0 || mid < next {
                 next = mid;
             }
-            if !seen.insert(m.key.clone()) {
-                continue;
+            if seen.contains(&m.key) { continue; }
+            if let Some(target) = recent_target {
+                let group_key = m.media_album_id.as_ref()
+                    .map(|album| format!("{}:a{album}", m.key.chat_id))
+                    .unwrap_or_else(|| format!("{}:m{}", m.key.chat_id, m.key.message_id));
+                if !logical_seen.contains(&group_key) && logical_seen.len() >= target {
+                    status = ScanStatus::Complete;
+                    detail = "Recent logical-post boundary reached".into();
+                    reached = true;
+                    break;
+                }
+                logical_seen.insert(group_key);
             }
+            seen.insert(m.key.clone());
             scanned += 1;
             if let Scope::Dates { from, to, .. } = spec.scope {
                 if m.date < from {
@@ -570,11 +655,19 @@ pub fn scan(
                     continue;
                 }
             }
+            let finishes_single = m.media_album_id.is_none();
             collected.push(m);
+            if let Some(target) = recent_target
+                && logical_seen.len() == target && finishes_single {
+                status = ScanStatus::Complete;
+                detail = "Recent logical-post scope complete".into();
+                reached = true;
+                break;
+            }
             if scanned >= budget {
-                if matches!(spec.scope, Scope::Recent { .. }) {
-                    status = ScanStatus::Complete;
-                    detail = "Recent raw-message scope complete".into();
+                if recent_target.is_some() {
+                    status = ScanStatus::Partial;
+                    detail = "Recent logical-post raw-message safety limit reached".into();
                 }
                 break;
             }

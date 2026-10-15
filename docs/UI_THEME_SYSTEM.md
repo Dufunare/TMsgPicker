@@ -37,3 +37,9 @@ Use only semantic design tokens in new component styles: `--surface`, `--canvas`
 - Previously deprecated persistent split ratios are **not reintroduced**.
 - CSS follows OS dark/light changes when Theme is set to Follow system. Windows caption updates when selecting/saving a theme in the app; an OS theme change while the app is open updates WebView CSS, and caption color may require reopening a window if no app theme-change event fires.
 - Windows native GUI visual QA and native Rust checks are separate from the frontend GitHub Actions workflow; tests must not invoke actual Telegram authorization, logout, forwarding, or Session deletion.
+
+## Advanced controls (October refinement)
+- Layout spacing multiplier: 75–140% (not persisted pane widths).
+- Glass surface opacity: 20–90%; Glass blur: 0–60px.
+- The right query action row is transparent in Glass to avoid a white rectangular patch.
+- Chat scope is per-account UI state: All / Main / Archive. TDLib Archive uses `chatListArchive`, distinct from the Main chat list. A non-empty query preloads a bounded number of archive pages; results beyond that boundary require future pagination.

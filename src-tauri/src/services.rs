@@ -220,41 +220,171 @@ pub struct Chat {
     pub id: String,
     pub title: String,
     pub kind: String,
+    #[serde(default)]
+    pub archived: bool,
+    #[serde(default)]
+    pub photo_file_id: Option<i32>,
+    #[serde(default)]
+    pub photo_big_file_id: Option<i32>,
+    #[serde(default)]
+    pub photo_minithumbnail: Option<String>,
 }
+
+#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatListScope {
+    #[default]
+    All,
+    Main,
+    Archive,
+}
+
 pub struct ChatService;
 impl ChatService {
     pub fn describe(v: Value) -> Result<Chat> {
+        let archived = v["positions"]
+            .as_array()
+            .is_some_and(|positions| positions.iter().any(|position| {
+                position["list"]["@type"] == "chatListArchive"
+            }));
         Ok(Chat {
             id: v["id"].as_i64().ok_or("Invalid chat ID")?.to_string(),
             title: v["title"].as_str().unwrap_or("Untitled").into(),
             kind: v["type"]["@type"].as_str().unwrap_or("unknown").into(),
+            archived,
+            photo_file_id: v["photo"]["small"]["id"].as_i64().and_then(|id| i32::try_from(id).ok()).filter(|id| *id > 0),
+            photo_big_file_id: v["photo"]["big"]["id"].as_i64().and_then(|id| i32::try_from(id).ok()).filter(|id| *id > 0),
+            photo_minithumbnail: v["photo"]["minithumbnail"]["data"].as_str()
+                .filter(|value|value.len()<16_384&&value.chars().all(|c|c.is_ascii_alphanumeric()||matches!(c,'+'|'/'|'=')))
+                .map(|value|format!("data:image/jpeg;base64,{value}")),
         })
     }
-    pub fn list(g: &dyn TelegramGateway, search: &str) -> Result<Vec<Chat>> {
-        let c = AtomicBool::new(false);
-        if search.trim().is_empty()
-            && let Err(e) = g.request(
-                json!({"@type":"loadChats","chat_list":{"@type":"chatListMain"},"limit":100}),
-                &c,
-            )
-            && !e.contains("error 404")
-        {
-            return Err(e);
+
+    fn ids(value: Value) -> Result<Vec<Value>> {
+        Ok(value["chat_ids"]
+            .as_array()
+            .ok_or("Invalid chats response")?
+            .clone())
+    }
+
+    fn load_list(
+        g: &dyn TelegramGateway,
+        list: &str,
+        cancel: &AtomicBool,
+        max_pages: usize,
+    ) -> Result<()> {
+        for _ in 0..max_pages {
+            let result = g.request(
+                json!({"@type":"loadChats","chat_list":{"@type":list},"limit":100}),
+                cancel,
+            );
+            match result {
+                Ok(_) => {}
+                Err(e) if e.contains("error 404") => break, // TDLib: list fully loaded.
+                Err(e) => return Err(e),
+            }
         }
-        let v = g.request(
-            if search.trim().is_empty() {
-                json!({"@type":"getChats","chat_list":{"@type":"chatListMain"},"limit":100})
-            } else {
-                json!({"@type":"searchChats","query":search,"limit":100})
-            },
-            &c,
-        )?;
-        let mut out = Vec::new();
-        for cid in v["chat_ids"].as_array().ok_or("Invalid chats response")? {
-            let v = g.request(json!({"@type":"getChat","chat_id":cid}), &c)?;
-            out.push(Self::describe(v)?);
+        Ok(())
+    }
+
+    pub fn list(g: &dyn TelegramGateway, search: &str, scope: ChatListScope) -> Result<Vec<Chat>> {
+        let cancel = AtomicBool::new(false);
+        let query = search.trim();
+        let query_lower = query.to_lowercase();
+        // searchChats includes known archived chats too. Its ordering is Main-biased;
+        // its IDs alone must NEVER determine membership in Main vs Archive.
+        let matched_ids = if query.is_empty() {
+            BTreeSet::new()
+        } else {
+            Self::ids(g.request(json!({"@type":"searchChats","query":query,"limit":100}), &cancel)?)?
+                .into_iter()
+                .filter_map(|id| id.as_i64().map(|v| v.to_string()))
+                .collect::<BTreeSet<_>>()
+        };
+        let mut out = Vec::<Chat>::new();
+        let mut seen = BTreeSet::<String>::new();
+        for (list, is_archive) in [("chatListMain", false), ("chatListArchive", true)] {
+            if scope == ChatListScope::Main && is_archive
+                || scope == ChatListScope::Archive && !is_archive
+            {
+                continue;
+            }
+            // getChats(chatListX) is the authoritative list membership. In contrast,
+            // searchChats isn't scoped, and getChat.positions may be temporarily stale.
+            Self::load_list(g, list, &cancel, if query.is_empty() { 1 } else { 6 })?;
+            let page = g.request(
+                json!({"@type":"getChats","chat_list":{"@type":list},
+                    "limit":if query.is_empty() { 100 } else { 600 }}),
+                &cancel,
+            )?;
+            for id in Self::ids(page)? {
+                let mut chat = Self::describe(g.request(
+                    json!({"@type":"getChat","chat_id":id}), &cancel,
+                )?)?;
+                if !is_archive && chat.archived {
+                    // A stale duplicate must not leak into the Main-only view.
+                    continue;
+                }
+                chat.archived = is_archive;
+                if !query.is_empty()
+                    && !chat.title.to_lowercase().contains(&query_lower)
+                    && !matched_ids.contains(&chat.id)
+                {
+                    continue;
+                }
+                if seen.insert(chat.id.clone()) {
+                    out.push(chat);
+                } else if is_archive
+                    && let Some(old) = out.iter_mut().find(|item| item.id == chat.id)
+                {
+                    old.archived = true;
+                }
+            }
         }
         Ok(out)
+    }
+    /// Read only TDLib-owned media, sniff the actual file format, and strictly bound
+    /// transfer size. The WebView receives no filesystem path.
+    pub fn media_data(
+        g: &dyn TelegramGateway, file_id: i64, files_root: &Path, full: bool
+    ) -> Result<Option<String>> {
+        if file_id <= 0 { return Ok(None); }
+        let cancel = AtomicBool::new(false);
+        let limit = if full { 24 * 1024 * 1024 } else { 2 * 1024 * 1024 };
+        let file = g.request(json!({"@type":"downloadFile","file_id":file_id,
+            "priority":if full {16} else {3},"offset":0,"limit":0,"synchronous":true}), &cancel)?;
+        if file["local"]["is_downloading_completed"] != true { return Ok(None); }
+        let Some(path) = file["local"]["path"].as_str() else { return Ok(None) };
+        if path.is_empty() { return Ok(None); }
+        // TDLib may return files in the Session file cache or database cache.
+        // Both are account-owned. Canonicalize first to reject symlinks escaping the Session.
+        let session = files_root.parent().ok_or("Invalid Session files directory")?;
+        let canonical_session = std::fs::canonicalize(session).map_err(|_| "Session root unavailable")?;
+        let path = Path::new(path);
+        let resolved = if path.is_absolute() {
+            std::fs::canonicalize(path)
+        } else {
+            std::fs::canonicalize(files_root.join(path))
+                .or_else(|_| std::fs::canonicalize(session.join(path)))
+        }.map_err(|_| "Media unavailable")?;
+        if !resolved.starts_with(&canonical_session) || !resolved.is_file() {
+            return Err("Media path outside current Session".into());
+        }
+        if std::fs::metadata(&resolved).map_err(|_| "Media metadata unavailable")?.len() > limit {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(resolved).map_err(|_| "Media read failed")?;
+        if bytes.is_empty() || bytes.len() as u64 > limit { return Ok(None); }
+        let mime = if bytes.starts_with(&[0xff,0xd8,0xff]) { "image/jpeg" }
+            else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") { "image/png" }
+            else if bytes.starts_with(b"RIFF") && bytes.get(8..12)==Some(b"WEBP") { "image/webp" }
+            else if bytes.starts_with(b"GIF8") { "image/gif" }
+            else if bytes.len()>12 && bytes.get(4..8)==Some(b"ftyp") { "video/mp4" }
+            else { return Ok(None) };
+        Ok(Some(format!("data:{mime};base64,{}", STANDARD.encode(bytes))))
+    }
+    pub fn thumbnail(g: &dyn TelegramGateway, file_id: i64, files_root: &Path) -> Result<Option<String>> {
+        Self::media_data(g, file_id, files_root, false)
     }
     pub fn public(g: &dyn TelegramGateway, username: &str) -> Result<Chat> {
         Self::describe(g.request(

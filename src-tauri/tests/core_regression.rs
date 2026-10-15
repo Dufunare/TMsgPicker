@@ -9,7 +9,7 @@ use std::{
 use tmsgpicker_lib::{
     core::*,
     gateway::{Result, SessionLifecycle, TelegramGateway},
-    services::{ActionService, AuthService, ConnectConfig, ProxyConfig},
+    services::{ActionService, AuthService, ChatListScope, ChatService, ConnectConfig, ProxyConfig},
 };
 
 struct MockTelegramGateway {
@@ -1105,4 +1105,126 @@ fn permanently_stagnant_cursor_is_bounded() {
     assert_eq!(r.status, ScanStatus::Partial);
     assert_eq!(r.scanned, 1);
     assert_eq!(r.pages, 4);
+}
+
+#[test]
+fn chat_list_includes_archive_and_supports_scoped_search() {
+    struct ChatsMock {
+        requests: Mutex<Vec<Value>>,
+    }
+    impl TelegramGateway for ChatsMock {
+        fn request(&self, request: Value, _: &AtomicBool) -> Result<Value> {
+            self.requests.lock().unwrap().push(request.clone());
+            let kind = request["@type"].as_str().unwrap_or_default();
+            let archive = request["chat_list"]["@type"] == "chatListArchive";
+            match kind {
+                "loadChats" => Ok(json!({"@type":"ok"})),
+                "getChats" => {
+                    if archive { Ok(json!({"chat_ids":[2,3]})) }
+                    else { Ok(json!({"chat_ids":[1,2]})) }
+                }
+                "searchChats" => Ok(json!({"chat_ids":[1]})),
+                "getChat" => {
+                    let id=request["chat_id"].as_i64().unwrap();
+                    let title = match id { 1 => "Main One", 2 => "Archive Two", _ => "Archive Three" };
+                    let list = if id == 1 { "chatListMain" } else { "chatListArchive" };
+                    Ok(json!({"id":id,"title":title,"type":{"@type":"chatTypeSupergroup"},
+                        "positions":[{"list":{"@type":list},"order":"100"}]}))
+                }
+                _ => panic!("unexpected TDLib request: {kind}"),
+            }
+        }
+        fn request_batch(&self, _: Vec<Value>, _: &AtomicBool) -> Result<Vec<Value>> { unreachable!() }
+    }
+    let g = ChatsMock { requests: Mutex::new(vec![]) };
+    let all = ChatService::list(&g, "", ChatListScope::All).unwrap();
+    assert_eq!(all.len(),3);
+    assert_eq!(all.iter().filter(|c| c.archived).count(),2);
+    assert_eq!(all.iter().filter(|c| c.id=="2").count(),1);
+    let archived = ChatService::list(&g,"Three",ChatListScope::Archive).unwrap();
+    assert_eq!(archived.len(),1);
+    assert_eq!(archived[0].title,"Archive Three");
+    let main = ChatService::list(&g,"",ChatListScope::Main).unwrap();
+    assert_eq!(main.len(),1);
+    assert_eq!(main[0].title,"Main One");
+    assert!(g.requests.lock().unwrap().iter().any(|v| v["@type"]=="loadChats"
+        && v["chat_list"]["@type"]=="chatListArchive"));
+}
+
+#[test]
+fn recent_n_counts_complete_media_group_as_one_logical_post() {
+    let album = |id:i64| {
+        let mut msg=message(id);
+        msg["media_album_id"]=json!(987654321_i64);
+        msg["content"]=json!({"@type":"messagePhoto","caption":{"text":"album"},"photo":{"sizes":[]}});
+        msg
+    };
+    let g=MockTelegramGateway::pages(vec![
+        page(vec![message(112),album(111)]),
+        page(vec![album(111),album(110),album(109)]),
+        page(vec![album(109),message(108)]),
+    ]);
+    let mut spec=spec(2);spec.output_limit=8;
+    let r=scan(&g,&spec,"album-logical".into(),&AtomicBool::new(false),|_|{}).unwrap();
+    assert_eq!(r.scanned,4); // one text + three album members
+    assert_eq!(r.posts.len(),2);
+    assert_eq!(r.posts.iter().find(|p|p.kind==PostKind::Album).unwrap().members.len(),3);
+    assert!(r.posts.iter().all(|p|p.members.iter().all(|m|m.key.message_id!="108")));
+    assert_eq!(r.pages,3);
+    assert_eq!(g.requests.lock().unwrap()[0]["limit"],2);
+}
+#[test]
+fn recent_single_message_still_stops_at_exact_count() {
+    let g=MockTelegramGateway::pages(vec![page((90..=100).rev().map(message).collect())]);
+    let mut spec=spec(3);spec.output_limit=5;
+    let r=scan(&g,&spec,"singles".into(),&AtomicBool::new(false),|_|{}).unwrap();
+    assert_eq!(r.scanned,3);
+    assert_eq!(r.posts.len(),3);
+    assert_eq!(r.pages,1);
+}
+#[test]
+fn normalize_media_exposes_video_preview_and_full_photo_separately() {
+    let mut video=message(5);
+    video["content"]=json!({"@type":"messageVideo","video":{"video":{"id":71},"thumbnail":{"file":{"id":72},"format":{"@type":"thumbnailFormatMpeg4"}},"minithumbnail":{"data":"/9j/2Q=="}}});
+    let m=normalize(&video).unwrap();
+    assert_eq!(m.thumbnail_file_id,Some(72));
+    assert_eq!(m.full_file_id,Some(71));
+    let mut photo=message(6);
+    photo["content"]=json!({"@type":"messagePhoto","photo":{"sizes":[{"width":64,"height":64,"photo":{"id":17}},{"width":1280,"height":720,"photo":{"id":20}},{"width":320,"height":320,"photo":{"id":18}}]}});
+    let p=normalize(&photo).unwrap();
+    assert_eq!(p.thumbnail_file_id,Some(18));
+    assert_eq!(p.full_file_id,Some(20));
+}
+
+#[test]
+fn account_media_accepts_tdlib_owned_file_and_database_cache_but_denies_external_paths() {
+    struct MediaMock { path: String }
+    impl TelegramGateway for MediaMock {
+        fn request(&self, request: Value, _: &AtomicBool) -> Result<Value> {
+            assert_eq!(request["@type"], "downloadFile");
+            Ok(json!({"local":{"is_downloading_completed":true,"path":self.path}}))
+        }
+        fn request_batch(&self, _: Vec<Value>, _: &AtomicBool) -> Result<Vec<Value>> { unreachable!() }
+    }
+    let tmp = std::env::temp_dir().join(format!(
+        "tmsg-media-path-{}-{}",std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    let session=tmp.join("session");
+    std::fs::create_dir_all(session.join("db")).unwrap();
+    std::fs::create_dir_all(session.join("files")).unwrap();
+    let image=[0xff,0xd8,0xff,0xd9];
+    let db_file=session.join("db").join("image.jpg");
+    let file=session.join("files").join("image.jpg");
+    let outside=tmp.join("outside.jpg");
+    for path in [&db_file,&file,&outside] {std::fs::write(path,image).unwrap();}
+    for path in [&db_file,&file] {
+        let mock=MediaMock{path:path.to_string_lossy().into_owned()};
+        assert!(ChatService::media_data(&mock,1,&session.join("files"),false).unwrap().unwrap().starts_with("data:image/jpeg;"));
+    }
+    let relative=MediaMock{path:"image.jpg".into()};
+    assert!(ChatService::media_data(&relative,1,&session.join("files"),false).unwrap().is_some());
+    let forbidden=MediaMock{path:outside.to_string_lossy().into_owned()};
+    assert!(ChatService::media_data(&forbidden,1,&session.join("files"),false).is_err());
+    std::fs::remove_dir_all(tmp).unwrap();
 }

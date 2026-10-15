@@ -1,3 +1,4 @@
+use crate::services::ChatListScope;
 use crate::settings::{AppearancePreferences, Settings, Snapshot, Store};
 use crate::{
     core::{self, MessageKey, QuerySpec, ScanResult},
@@ -1256,7 +1257,7 @@ async fn logout_account(app: tauri::AppHandle, profile_id: String, confirmed: bo
     .await
 }
 #[tauri::command]
-async fn chats(app: tauri::AppHandle, profile_id: String, search: String) -> Result<Vec<Chat>> {
+async fn chats(app: tauri::AppHandle, profile_id: String, search: String, scope: Option<ChatListScope>) -> Result<Vec<Chat>> {
     background(move || {
         let global = app.state::<AppState>();
         let _gate = global
@@ -1266,11 +1267,51 @@ async fn chats(app: tauri::AppHandle, profile_id: String, search: String) -> Res
         let s = account(&global, &profile_id)?;
         let _lock = s
             .lifecycle
-            .try_lock()
-            .map_err(|_| "Session operation in progress")?;
-        ChatService::list(gateway(&s)?.as_ref(), &search)
+            .lock()
+            .map_err(|_| "Account lock poisoned")?;
+        ChatService::list(gateway(&s)?.as_ref(), &search, scope.unwrap_or_default())
     })
     .await
+}
+#[tauri::command]
+async fn photo_thumbnail(
+    app: tauri::AppHandle,
+    profile_id: String,
+    file_id: Option<i32>,
+    full: Option<bool>,
+    window: tauri::WebviewWindow,
+) -> Result<Option<String>> {
+    if full.unwrap_or(false) && window.label()!="main" {return Err("Full media restricted to workspace".into());}
+    background(move || {
+        let global = app.state::<AppState>();
+        let _gate = global.lifecycle.try_read().map_err(|_| "Application transition in progress")?;
+        let runtime = account(&global, &profile_id)?;
+        let _lock = runtime.lifecycle.lock().map_err(|_| "Account lock poisoned")?;
+        // TDLib file IDs are process-scoped. Never accept a path or arbitrary URL from WebView.
+        let g = gateway(&runtime)?;
+        let mut fallback: Option<String> = None;
+        let id = match file_id {
+            Some(id) => id,
+            None => {
+                let me = g.request(json!({"@type":"getMe"}), &AtomicBool::new(false))?;
+                fallback = me["profile_photo"]["minithumbnail"]["data"].as_str()
+                    .filter(|data|data.len()<16_384 && data.chars().all(|c|c.is_ascii_alphanumeric()||matches!(c,'+'|'/'|'=')))
+                    .map(|data|format!("data:image/jpeg;base64,{data}"));
+                let Some(id) = me["profile_photo"]["small"]["id"].as_i64().or_else(||me["profile_photo"]["big"]["id"].as_i64()).and_then(|id| i32::try_from(id).ok()) else {return Ok(fallback)};
+
+                id
+            }
+        };
+        // File content is only read from this account's TDLib-managed files directory.
+        let root = with_store(&global, |store| Ok(store.session_root(&profile_id)?))?;
+        match ChatService::media_data(g.as_ref(), i64::from(id), &root.join("files"), full.unwrap_or(false)) {
+            Ok(Some(photo)) => Ok(Some(photo)),
+            // A small TDLib minithumbnail is preferable to an empty account card
+            // while a larger photo is temporarily unavailable.
+            Ok(None) | Err(_) if fallback.is_some() => Ok(fallback),
+            other => other,
+        }
+    }).await
 }
 #[tauri::command]
 async fn public_chat(app: tauri::AppHandle, profile_id: String, username: String) -> Result<Chat> {
@@ -2268,6 +2309,7 @@ pub fn run() {
             disconnect,
             chats,
             public_chat,
+            photo_thumbnail,
             saved_messages,
             start_query,
             cancel_query,

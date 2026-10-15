@@ -18,7 +18,19 @@ pub struct AppearancePreferences {
     pub font_scale: u8,
     pub elevation: String,
     pub scrollbar: String,
+    #[serde(default = "default_glass_opacity")]
+    pub glass_opacity: u8,
+    #[serde(default = "default_glass_blur")]
+    pub glass_blur: u8,
+    #[serde(default = "default_spacing")]
+    pub spacing: u8,
+    #[serde(default = "default_preview_size")]
+    pub image_preview_size: u16,
 }
+fn default_preview_size() -> u16 { 250 }
+fn default_glass_opacity() -> u8 { 48 }
+fn default_glass_blur() -> u8 { 30 }
+fn default_spacing() -> u8 { 100 }
 impl Default for AppearancePreferences {
     fn default() -> Self {
         Self {
@@ -29,6 +41,10 @@ impl Default for AppearancePreferences {
             font_scale: 100,
             elevation: "soft".into(),
             scrollbar: "slim".into(),
+            glass_opacity: default_glass_opacity(),
+            glass_blur: default_glass_blur(),
+            spacing: default_spacing(),
+            image_preview_size: default_preview_size(),
         }
     }
 }
@@ -41,6 +57,10 @@ impl AppearancePreferences {
             || !matches!(self.scrollbar.as_str(), "slim" | "standard")
             || !(6..=22).contains(&self.radius)
             || !(85..=120).contains(&self.font_scale)
+            || !(20..=90).contains(&self.glass_opacity)
+            || self.glass_blur > 60
+            || !(75..=140).contains(&self.spacing)
+            || !(120..=520).contains(&self.image_preview_size)
             || hex.len() != 7
             || hex[0] != b'#'
             || !hex[1..].iter().all(u8::is_ascii_hexdigit)

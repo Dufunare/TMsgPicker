@@ -1,10 +1,11 @@
 
 import { computed, onMounted, onUnmounted, ref } from 'vue';
+import {clearAvatars} from './media/avatarCache.ts';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen, emit, type UnlistenFn } from '@tauri-apps/api/event';
 import { openUrl } from '@tauri-apps/plugin-opener';
 import { inject } from 'vue';
-import type { Chat, Connection, ForwardReport, Post, QuerySpec, ScanResult, SettingsSnapshot, CloseChallenge, UnknownSend } from './types';
+import type { ChatScope, Chat, Connection, ForwardReport, Post, QuerySpec, ScanResult, SettingsSnapshot, CloseChallenge, UnknownSend } from './types';
 import {useApplicationSettings} from './useApplicationSettings.ts';
 import { createAccountViews, type AccountView } from './accountViews.ts';
 
@@ -20,6 +21,7 @@ const connection = computed<Connection>(() => statuses[profileId.value] ?? { pro
 const ready = computed(() => connection.value.runtime_state === 'Ready' && connection.value.auth_state === 'authorizationStateReady');
 const busy=field('busy'), error=field('error'), chatError=field('chatError'), accountError=field('accountError'), notice=field('notice');
 let sessionToken=0, chatTimer:ReturnType<typeof setTimeout>|undefined;
+const chatRevisions=new Map<string,number>();
 const dialog=ref<{title:string;text:string;input?:string;allowDelete?:boolean;phrase?:string}|null>(null);
 let dialogResolve:((value:{text:string;deleteData:boolean}|null)=>void)|null=null;
 function askDialog(options:NonNullable<typeof dialog.value>){if(dialog.value)return Promise.resolve(null);return new Promise<{text:string;deleteData:boolean}|null>(resolve=>{dialog.value=options;dialogResolve=resolve;});}
@@ -30,6 +32,7 @@ const {apiId,apiHash,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,ap
 
 const chatList = field('chatList');
 const search = field('search');
+const chatScope = field('chatScope');
 const selectedChat = field('selectedChat');
 const scopeKind = field('scopeKind');
 const rawCount = field('rawCount');
@@ -58,7 +61,7 @@ const authLabel = computed(() => ({ authorizationStateWaitPhoneNumber: '手机�
 const unlisteners: UnlistenFn[] = [];
 
 async function action(fn: () => Promise<void>) { const v=view.value;v.error='';v.busy=true;try{await fn();}catch(e){v.error=String(e);}finally{v.busy=false;} }
-function clearSession(id=profileId.value) { accountViews.reset(id);if(id===profileId.value){sessionToken++;authValue.value='';} }
+function clearSession(id=profileId.value) { chatRevisions.set(id,(chatRevisions.get(id)??0)+1);clearAvatars(id);accountViews.reset(id);if(id===profileId.value){sessionToken++;authValue.value='';} }
 async function accountAction(fn:()=>Promise<void|boolean>){const id=profileId.value,v=view.value;v.accountError='';v.busy=true;try{const changed=await fn();if(changed!==false)await emitEvent('workspace-settings-changed',{source:settingsView?'settings':'main'});}catch(e){accountViews.get(id).accountError=String(e);}finally{v.busy=false;}}
 async function refreshSettings(){snapshot.value=await invokeCommand<SettingsSnapshot>('app_settings');if(!settingsView&&!snapshot.value.profiles.some(p=>p.profile_id===profileId.value))profileId.value=snapshot.value.primary_profile_id??'';const states=await invokeCommand<Connection[]>('account_statuses');states.forEach(accountViews.connection);const unknown=await invokeCommand<UnknownSend[]>('unknown_sends');unknown.forEach(accountViews.sent);}
 async function confirmPendingClose(profileId:string|null, initial?:CloseChallenge,logout=false):Promise<string|null|undefined>{
@@ -94,17 +97,39 @@ async function logoutAccount(){const id=profileId.value;const profile=snapshot.v
 function resizeLayout(left:number,right:number){leftRatio.value=left;rightRatio.value=right;}
 function resetLayout(){resizeLayout(.23,.29);}
 async function chatAction(fn:()=>Promise<void>){const v=view.value;v.chatError='';v.busy=true;try{await fn();}catch(e){v.chatError=String(e);}finally{v.busy=false;}}
+// A single monotonically increasing revision covers manual fetches AND timed refreshes.
+// Old responses cannot reinsert chats from the previous scope, query, or generation.
+async function fetchChats(id:string,v:AccountView){
+  const query=v.search,scope=v.chatScope,generation=statuses[id]?.generation??0;
+  const revision=(chatRevisions.get(id)??0)+1;chatRevisions.set(id,revision);
+  const chats=await invokeCommand<Chat[]>('chats',{profileId:id,search:query,scope});
+  if(chatRevisions.get(id)!==revision || accountViews.views[id]!==v
+    || v.search!==query || v.chatScope!==scope || statuses[id]?.generation!==generation)return;
+  // Guard the presentation layer as well: public chat lookups don't define list ownership.
+  v.chatList=chats.filter(chat=>scope==='all'||(scope==='archive'?chat.archived===true:chat.archived!==true));
+  v.chatError='';
+}
 function scheduleChats(attempt=0){
   if(settingsView)return;clearTimeout(chatTimer);const token=sessionToken;
   chatTimer=setTimeout(async()=>{
     if(token!==sessionToken||!ready.value)return;
-    const id=profileId.value,v=view.value,generation=connection.value.generation;
-    try{const list=await invokeCommand<Chat[]>('chats',{profileId:id,search:v.search});if(statuses[id]?.generation===generation){v.chatList=list;v.chatError='';}}
-    catch(e){if(String(e).includes('Session operation in progress')&&attempt<5&&profileId.value===id)scheduleChats(attempt+1);else v.chatError=String(e);}
+    const id=profileId.value,v=view.value;
+    try{await fetchChats(id,v);}
+    catch(e){if(String(e).includes('Session operation in progress')&&attempt<5&&profileId.value===id)scheduleChats(attempt+1);else if(profileId.value===id)v.chatError=String(e);}
   },150);
 }
-async function loadChats() {const id=profileId.value,v=view.value;await chatAction(async()=>{const list=await invokeCommand<Chat[]>('chats',{profileId:id,search:v.search});if(accountViews.views[id]===v)v.chatList=list;});}
-async function resolvePublic() {const id=profileId.value,v=view.value;await chatAction(async()=>{const c=await invokeCommand<Chat>('public_chat',{profileId:id,username:v.search});if(accountViews.views[id]!==v)return;if(!v.chatList.some(x=>x.id===c.id))v.chatList.unshift(c);v.selectedChat=c;});}
+async function loadChats(){
+  const id=profileId.value,v=view.value;
+  await chatAction(()=>fetchChats(id,v));
+}
+async function switchChatScope(scope:ChatScope){
+  const v=view.value;
+  if(v.chatScope===scope)return;
+  v.chatScope=scope;
+  v.chatList=[]; // Do not show the previous list during a slow TDLib reload.
+  await loadChats();
+}
+async function resolvePublic() {const id=profileId.value,v=view.value;await chatAction(async()=>{const c=await invokeCommand<Chat>('public_chat',{profileId:id,username:v.search});if(accountViews.views[id]!==v)return;if(v.chatScope==='all'||(v.chatScope==='archive'?c.archived===true:c.archived!==true)){if(!v.chatList.some(x=>x.id===c.id))v.chatList.unshift(c);}v.selectedChat=c;});}
 async function savedMessages() {const id=profileId.value,v=view.value;await action(async()=>{const c=await invokeCommand<Chat>('saved_messages',{profileId:id});if(accountViews.views[id]!==v)return;if(!v.chatList.some(x=>x.id===c.id))v.chatList.push(c);v.target=c.id;v.confirmation=false;v.confirmedSelection=null;});}
 function preset() {filter.value={kind:'not',item:{kind:'and',items:[{kind:'is_null',field:{kind:'reply_info'}},{kind:'compare',field:{kind:'post_kind'},op:'eq',value:'single'}]}};}
 async function runQuery() {
@@ -148,6 +173,7 @@ onMounted(async () => {
     unlisteners.push(await listen<Connection>('connection',e=>{
       const previous=e.payload.profile_id?statuses[e.payload.profile_id]:undefined;
       if(!accountViews.connection(e.payload))return;
+       if(e.payload.profile_id&&previous&&previous.generation!==e.payload.generation)clearAvatars(e.payload.profile_id);
       if(!settingsView&&e.payload.profile_id===profileId.value&&e.payload.runtime_state==='Ready'&&previous?.runtime_state!=='Ready')scheduleChats();
     }));
     unlisteners.push(await listen<{profile_id:string;generation:number;result:ScanResult}>('query-progress',e=>accountViews.progress(e.payload)));
@@ -167,9 +193,9 @@ onMounted(async () => {
     await refreshSettings();applySettings();const requested=settingsView?new URLSearchParams(window.location.search).get('profile'):null;profileId.value=settingsView?(requested??(profileId.value||snapshot.value?.primary_profile_id||snapshot.value?.profiles[0]?.profile_id||'')):(snapshot.value?.primary_profile_id??snapshot.value?.profiles[0]?.profile_id??'');await selectAccount();if(ready.value&&!settingsView)void loadChats();
   } catch(e) {accountError.value=String(e);}
 });
-onUnmounted(()=>{unlisteners.forEach(fn=>fn());clearTimeout(chatTimer);answerDialog(null);});
+onUnmounted(()=>{unlisteners.forEach(fn=>fn());clearTimeout(chatTimer);clearAvatars();answerDialog(null);});
 
-return { dialog,answerDialog,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,preset,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetReport,resetBusy,resetLayout,resizeLayout };
+return { dialog,answerDialog,chatScope,switchChatScope,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,preset,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetReport,resetBusy,resetLayout,resizeLayout };
 }
 export type Workspace = ReturnType<typeof useWorkspace>;
 export const workspaceKey=Symbol("workspace");

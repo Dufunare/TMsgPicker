@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
 import { useAppearance, type Appearance } from '../theme/appearance';
+import AppSelect from './AppSelect.vue';
 const {appearance,previewAppearance,persistAppearance,defaultAppearance,appearanceReady,appearanceLoadError} = useAppearance();
 const draft=ref<Appearance>({...appearance});
 const saving=ref(false);
@@ -37,7 +38,7 @@ function defaults(){draft.value={...defaultAppearance};preview();}
       </div>
     </label>
     <label>界面密度
-      <select v-model="draft.density" @change="preview"><option value="comfortable">舒适</option><option value="compact">紧凑</option></select>
+      <AppSelect v-model="draft.density" label="界面密度" :options="[{value:'comfortable',label:'舒适'},{value:'compact',label:'紧凑'}]" @change="preview"/>
     </label>
   </div>
   </section>
@@ -46,8 +47,12 @@ function defaults(){draft.value={...defaultAppearance};preview();}
     <div class="appearance-inline">
       <label><span class="setting-label">圆角 <span class="setting-value">{{draft.radius}}px</span></span><input v-model.number="draft.radius" type="range" min="6" max="22" step="1" @input="preview"></label>
       <label><span class="setting-label">字号 <span class="setting-value">{{draft.font_scale}}%</span></span><input v-model.number="draft.font_scale" type="range" min="85" max="120" step="5" @input="preview"></label>
-      <label>阴影层次<select v-model="draft.elevation" @change="preview"><option value="flat">平面</option><option value="soft">柔和</option><option value="raised">浮起</option></select></label>
-      <label>滚动条<select v-model="draft.scrollbar" @change="preview"><option value="slim">纤细</option><option value="standard">标准</option></select></label>
+      <label>阴影层次<AppSelect v-model="draft.elevation" label="阴影层次" :options="[{value:'flat',label:'平面'},{value:'soft',label:'柔和'},{value:'raised',label:'浮起'}]" @change="preview"/></label>
+      <label>滚动条<AppSelect v-model="draft.scrollbar" label="滚动条" :options="[{value:'slim',label:'纤细'},{value:'standard',label:'标准'}]" @change="preview"/></label>
+      <label><span class="setting-label">图片预览大小 <span class="setting-value">{{draft.image_preview_size ?? 250}}px</span></span><input v-model.number="draft.image_preview_size" type="range" min="120" max="520" step="20" @input="preview"></label>
+      <label><span class="setting-label">布局间距 <span class="setting-value">{{draft.spacing ?? 100}}%</span></span><input v-model.number="draft.spacing" type="range" min="75" max="140" step="5" @input="preview"></label>
+      <label><span class="setting-label">玻璃不透明度 <span class="setting-value">{{draft.glass_opacity ?? 48}}%</span></span><input v-model.number="draft.glass_opacity" type="range" min="20" max="90" step="5" :disabled="draft.theme!=='glass'" @input="preview"></label>
+      <label><span class="setting-label">玻璃模糊 <span class="setting-value">{{draft.glass_blur ?? 30}}px</span></span><input v-model.number="draft.glass_blur" type="range" min="0" max="60" step="5" :disabled="draft.theme!=='glass'" @input="preview"></label>
     </div>
   </details>
   <div class="buttons appearance-actions">

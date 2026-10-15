@@ -1,10 +1,11 @@
 export interface MessageKey { chat_id: string; message_id: string }
 export interface Reaction { key: { kind: 'emoji' | 'custom_emoji' | 'paid' | 'unknown'; value?: string }; count: number }
 export interface Metrics { views: number | null; forwards: number | null; reply_info: number | null; reactions: Reaction[] | null }
-export interface Message { key: MessageKey; date: number; content_kind: string; text: string; media_album_id: string | null; metrics: Metrics }
+export interface Message { key: MessageKey; date: number; content_kind: string; text: string; media_album_id: string | null; thumbnail_file_id?: number|null; full_file_id?:number|null; minithumbnail?:string|null; metrics: Metrics }
 export interface Post { key: string; kind: 'single' | 'album'; members: Message[]; representative: MessageKey; date: number; text: string; metrics: Metrics; provenance: Record<string, string>; partial: boolean }
 export interface ScanResult { run_id: string; status: 'Scanning' | 'Partial' | 'Complete' | 'Cancelled' | 'Error'; scanned: number; pages: number; exact: boolean; detail: string; posts: Post[] }
-export interface Chat { id: string; title: string; kind: string }
+export interface Chat { id: string; title: string; kind: string; archived?: boolean; photo_file_id?: number|null; photo_big_file_id?: number|null; photo_minithumbnail?: string|null }
+export type ChatScope = 'all' | 'main' | 'archive';
 export interface Connection { profile_id: string | null; generation: number; runtime_state: string; auth_state: string; connection_state: string; detail: string; user_disconnected: boolean }
 export type FieldName = 'views' | 'forwards' | 'comments' | 'reply_info' | 'reaction_total' | 'reaction' | 'post_kind' | 'media_album_id' | 'content_kind' | 'date';
 export interface Field { kind: FieldName; emoji?: string }
