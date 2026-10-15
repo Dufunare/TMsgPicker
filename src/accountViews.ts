@@ -1,9 +1,9 @@
 import { reactive } from 'vue';
-import type { Chat, Connection, FieldName, Filter, ForwardReport, ScanResult, UnknownSend } from './types';
+import type { Chat, ChatScope, Connection, FieldName, Filter, ForwardReport, ScanResult, UnknownSend } from './types';
 
 export function emptyView() {
   return {
-    chatList: [] as Chat[], search: '', selectedChat: null as Chat | null,
+    chatList: [] as Chat[], search: '', chatScope: 'all' as ChatScope, selectedChat: null as Chat | null,
     scopeKind: 'recent', rawCount: 50, fromDate: '', toDate: '', budget: 5000,
     filter: { kind: 'and', items: [] } as Filter, sortField: 'views' as FieldName,
     sortEmoji: '👍', descending: true, outputLimit: 20,
