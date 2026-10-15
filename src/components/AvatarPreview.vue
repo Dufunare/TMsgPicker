@@ -2,11 +2,11 @@
 import {computed,ref,watch} from 'vue';
 import {isTauri} from '@tauri-apps/api/core';
 import {avatarKey,cachedAvatar,requestAvatar} from '../media/avatarCache';
-const props=withDefaults(defineProps<{profileId:string;generation:number;fileId?:number;account?:boolean;name:string;size?:'sm'|'md'}>(),{size:'md'});
+const props=withDefaults(defineProps<{profileId:string;generation:number;fileId?:number;fallbackImage?:string|null;account?:boolean;name:string;size?:'sm'|'md'}>(),{size:'md'});
 const active=ref(false);
 const root=ref<HTMLElement>();
 const key=computed(()=>avatarKey(props.profileId,props.generation,props.account ? undefined : props.fileId));
-const url=computed(()=>cachedAvatar(key.value));
+const url=computed(()=>cachedAvatar(key.value)||props.fallbackImage||'');
 let observer:IntersectionObserver|undefined;
 watch(key,()=>{if(active.value)void load();});
 async function load(){if(isTauri()&&(props.account||props.fileId))await requestAvatar(props.profileId,props.generation,props.account?undefined:props.fileId);}
