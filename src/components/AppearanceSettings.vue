@@ -1,15 +1,20 @@
 <script setup lang="ts">
 import { ref, watch } from 'vue';
-import { useAppearance, applyAppearance, type Appearance } from '../theme/appearance';
-const {appearance,persistAppearance,defaultAppearance} = useAppearance();
+import { useAppearance, type Appearance } from '../theme/appearance';
+const {appearance,previewAppearance,persistAppearance,defaultAppearance,appearanceReady,appearanceLoadError} = useAppearance();
 const draft=ref<Appearance>({...appearance});
 const saving=ref(false);
 const error=ref('');
 const saved=ref(false);
+let previewRevision=0;
 watch(appearance, value => { if(!saving.value) draft.value={...value}; }, { deep:true });
-function preview(){applyAppearance({...draft.value});saved.value=false;}
+async function preview(){
+  const revision=++previewRevision;saved.value=false;error.value='';
+  try{await previewAppearance({...draft.value});}
+  catch(e){if(revision===previewRevision)error.value=String(e);}
+}
 async function save(){
-  saving.value=true;error.value='';
+  previewRevision++;saving.value=true;error.value='';
   try { await persistAppearance({...draft.value});saved.value=true; }
   catch(e){error.value=String(e);}
   finally{saving.value=false;}
@@ -18,6 +23,7 @@ function defaults(){draft.value={...defaultAppearance};preview();}
 </script>
 <template>
 <section class="settings-content appearance-settings">
+  <fieldset class="appearance-controls" :disabled="saving||!appearanceReady">
   <section class="settings-card" aria-labelledby="appearance-theme-title">
   <h3 id="appearance-theme-title">主题与界面</h3>
   <div class="appearance-presets" role="group" aria-label="主题">
@@ -27,7 +33,7 @@ function defaults(){draft.value={...defaultAppearance};preview();}
     <label>强调色
       <div class="color-input">
         <input v-model="draft.accent" type="color" aria-label="强调颜色" @input="preview">
-        <input v-model="draft.accent" maxlength="7" pattern="#[a-fA-F0-9]{6}" aria-label="强调色 HEX" @change="preview">
+        <input v-model="draft.accent" maxlength="7" pattern="#[a-fA-F0-9]{6}" aria-label="强调色 HEX" @input="preview">
       </div>
     </label>
     <label>界面密度
@@ -45,10 +51,11 @@ function defaults(){draft.value={...defaultAppearance};preview();}
     </div>
   </details>
   <div class="buttons appearance-actions">
-    <button class="primary" type="button" :disabled="saving" @click="save">{{saving?'保存中…':'保存外观'}}</button>
+    <button class="primary" type="button" :disabled="saving" @click="save">{{saving?'应用中…':'应用主题'}}</button>
     <button type="button" :disabled="saving" @click="defaults">恢复默认</button>
-    <span v-if="saved" role="status" class="saved-indicator">已保存</span>
+    <span v-if="saved" role="status" class="saved-indicator">已应用</span>
   </div>
-  <p v-if="error" role="alert" class="error">{{error}}</p>
+  </fieldset>
+  <p v-if="error||appearanceLoadError" role="alert" class="error">{{error||appearanceLoadError}}</p>
 </section>
 </template>

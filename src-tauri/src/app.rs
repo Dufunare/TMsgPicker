@@ -21,6 +21,9 @@ mod login;
 use login::*;
 #[path = "window_theme.rs"]
 mod window_theme;
+#[path = "appearance_session.rs"]
+mod appearance_session;
+use appearance_session::{AppearanceSession, AppearanceSnapshot};
 
 #[derive(Clone, Serialize)]
 struct Connection {
@@ -50,6 +53,7 @@ struct AppState {
     lifecycle: RwLock<()>,
     settings_window: Mutex<()>,
     settings_target: Mutex<SettingsTarget>,
+    appearance_session: Mutex<AppearanceSession>,
     pending_login: Mutex<Option<PendingLogin>>,
     store: Mutex<Option<Store>>,
     manager: TdlibRuntimeManager,
@@ -577,10 +581,8 @@ fn open_auxiliary(app: &tauri::AppHandle, label: &str, url: &str, title: &str) -
                 .build()
                 .map_err(|_| "Cannot open window")?;
         window_theme::apply(&window);
-        if let Ok(appearance) = with_store(&app.state::<AppState>(), |store| {
-            Ok(store.settings().appearance)
-        }) {
-            window_theme::apply_appearance(&window, &appearance);
+        if let Ok(snapshot) = current_appearance(&app.state::<AppState>()) {
+            window_theme::apply_appearance(&window, &snapshot.appearance);
         }
     }
     Ok(())
@@ -631,21 +633,69 @@ fn route_window_close(label: &str, main_close: impl FnOnce()) {
         main_close();
     }
 }
+fn current_appearance(state: &AppState) -> Result<AppearanceSnapshot> {
+    let session = state.appearance_session.lock().unwrap();
+    with_store(state, |store| Ok(session.snapshot(store.settings().appearance)))
+}
+fn publish_appearance(app: &tauri::AppHandle, snapshot: &AppearanceSnapshot) {
+    for window in app.webview_windows().values() {
+        window_theme::apply_appearance(window, &snapshot.appearance);
+    }
+    let _ = app.emit("appearance-changed", snapshot);
+}
+#[tauri::command]
+fn appearance_state(s: State<AppState>) -> Result<AppearanceSnapshot> {
+    let _gate = s
+        .lifecycle
+        .try_read()
+        .map_err(|_| "Application transition in progress")?;
+    ensure_running(&s)?;
+    current_appearance(&s)
+}
+fn edit_appearance(
+    app: &tauri::AppHandle,
+    window: &tauri::WebviewWindow,
+    editor: u64,
+    appearance: AppearancePreferences,
+    save: bool,
+) -> Result<AppearanceSnapshot> {
+    if window.label() != "settings" || app.get_webview_window("settings").is_none() {
+        return Err("请在外观设置中调整主题".into());
+    }
+    let state = app.state::<AppState>();
+    let _gate = state
+        .lifecycle
+        .try_read()
+        .map_err(|_| "Application transition in progress")?;
+    ensure_running(&state)?;
+    let snapshot = {
+        let mut session = state.appearance_session.lock().unwrap();
+        let persist = |next: &AppearancePreferences| {
+            with_store(&state, |store| store.set_appearance(next.clone()))
+        };
+        session.update(editor, appearance, if save { Some(persist) } else { None })?;
+        with_store(&state, |store| Ok(session.snapshot(store.settings().appearance)))?
+    };
+    publish_appearance(app, &snapshot);
+    Ok(snapshot)
+}
+#[tauri::command]
+fn preview_appearance(
+    app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    editor: u64,
+    appearance: AppearancePreferences,
+) -> Result<AppearanceSnapshot> {
+    edit_appearance(&app, &window, editor, appearance, false)
+}
 #[tauri::command]
 fn save_appearance(
     app: tauri::AppHandle,
+    window: tauri::WebviewWindow,
+    editor: u64,
     appearance: AppearancePreferences,
-) -> Result<AppearancePreferences> {
-    let state = app.state::<AppState>();
-    if state.exiting.load(Ordering::SeqCst) {
-        return Err("Application is shutting down".into());
-    }
-    with_store(&state, |store| store.set_appearance(appearance.clone()))?;
-    for window in app.webview_windows().values() {
-        window_theme::apply_appearance(window, &appearance);
-    }
-    let _ = app.emit("appearance-changed", &appearance);
-    Ok(appearance)
+) -> Result<AppearanceSnapshot> {
+    edit_appearance(&app, &window, editor, appearance, true)
 }
 #[tauri::command]
 fn app_settings(s: State<AppState>) -> Result<Snapshot> {
@@ -737,6 +787,8 @@ async fn save_settings(
         let snapshot = with_store(&s, |store| {
             let mut settings = edit.settings;
             settings.last_profile_id = None;
+            // Connection settings cannot commit an appearance draft or overwrite a newer theme.
+            settings.appearance = store.settings().appearance;
             store.edit_application_config(settings, edit.api_hash, edit.proxy_password)?;
             Ok(store.snapshot())
         })?;
@@ -2138,6 +2190,27 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
+            if window.label() == "settings" && matches!(event, tauri::WindowEvent::Destroyed) {
+                let app = window.app_handle();
+                let state = app.state::<AppState>();
+                // Do not reopen storage while shutdown or complete Debug reset is removing it.
+                if state.exiting.load(Ordering::SeqCst)
+                    || state.reset_cleanup_pending.load(Ordering::SeqCst)
+                {
+                    return;
+                }
+                let snapshot = {
+                    let mut session = state.appearance_session.lock().unwrap();
+                    session.cancel();
+                    with_store(&state, |store| Ok(session.snapshot(store.settings().appearance)))
+                };
+                match snapshot {
+                    Ok(snapshot) => publish_appearance(app, &snapshot),
+                    Err(error) => {
+                        let _ = app.emit("app-error", error);
+                    }
+                }
+            }
             if window.label() == "login" && matches!(event, tauri::WindowEvent::Destroyed) {
                 let app = window.app_handle().clone();
                 tauri::async_runtime::spawn_blocking(move || {
@@ -2177,6 +2250,8 @@ pub fn run() {
             #[cfg(debug_assertions)]
             debug_reset,
             app_settings,
+            appearance_state,
+            preview_appearance,
             save_appearance,
             save_settings,
             reset_settings,

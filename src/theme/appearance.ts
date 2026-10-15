@@ -1,6 +1,7 @@
-import { reactive, readonly } from 'vue';
+import { reactive, readonly, ref } from 'vue';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
+import {createAppearanceClient,type AppearanceSnapshot} from './appearanceClient.ts';
 
 export type Appearance = {
   theme: 'system' | 'light' | 'dark' | 'glass';
@@ -20,6 +21,9 @@ export const defaultAppearance: Appearance = {
 const current = reactive<Appearance>({ ...defaultAppearance });
 export const appearance = readonly(current);
 const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
+const appearanceReady=ref(!isTauri());
+const appearanceLoadError=ref('');
+let client:ReturnType<typeof createAppearanceClient>|undefined;
 
 export function isDark(settings: Appearance = current): boolean {
   return settings.theme === 'dark' || (settings.theme === 'system' && prefersDark.matches);
@@ -74,10 +78,17 @@ export function applyAppearance(next: Appearance) {
   if (isTauri()) document.documentElement.dataset.desktop = 'true';
 }
 
+export async function previewAppearance(next: Appearance) {
+  if (!validAppearance(next)) throw new Error('请检查外观设置，强调色须为完整的 HEX 颜色');
+  if (!isTauri()) { applyAppearance(next);return; }
+  if (!appearanceReady.value||!client) throw new Error('外观设置尚未加载完成');
+  await client.preview(next);
+}
+
 export async function persistAppearance(next: Appearance) {
   if (!validAppearance(next)) throw new Error('Invalid appearance settings');
-  const saved = await invoke<Appearance>('save_appearance', { appearance: next });
-  applyAppearance(saved);
+  if (!appearanceReady.value||!client) throw new Error('请在桌面应用中应用主题');
+  await client.save(next);
 }
 
 export async function initializeAppearance() {
@@ -85,15 +96,16 @@ export async function initializeAppearance() {
   prefersDark.addEventListener('change', () => { if (current.theme === 'system') applyAppearance({ ...current }); });
   if (!isTauri()) return;
   try {
-    await listen<Appearance>('appearance-changed', e => applyAppearance(e.payload));
-    const snapshot = await invoke<{settings: {appearance?: Appearance}}>('app_settings');
-    if (snapshot.settings.appearance) applyAppearance(snapshot.settings.appearance);
+    client=createAppearanceClient(invoke,receive=>listen<AppearanceSnapshot>('appearance-changed',e=>receive(e.payload)),applyAppearance);
+    await client.start();
+    appearanceReady.value=true;
   } catch (error) {
+    appearanceLoadError.value=`外观加载失败：${String(error)}`;
     // App startup must not depend on appearance storage.
     console.warn('Appearance unavailable:', error instanceof Error ? error.message : String(error));
   }
 }
 
 export function useAppearance() {
-  return { appearance, persistAppearance, defaultAppearance, isDark };
+  return { appearance, previewAppearance, persistAppearance, defaultAppearance, isDark, appearanceReady, appearanceLoadError };
 }

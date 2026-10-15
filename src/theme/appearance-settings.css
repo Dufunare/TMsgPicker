@@ -11,3 +11,4 @@
 .saved-indicator { color:var(--success); font-size:calc(11px * var(--font-scale)); }
 .appearance-actions { margin-top:12px; }
 @media(max-width:430px){.appearance-presets{grid-template-columns:repeat(2,minmax(0,1fr));}.appearance-inline{grid-template-columns:1fr;}}
+.appearance-controls { min-width:0; margin:0; padding:0; border:0; }

@@ -32,6 +32,9 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 |---|---|---|
 | `open_settings` | `{profileId:string|null}` | 打开／聚焦唯一 settings 窗口。null 定位应用子页面，正式 ID 定位账号子页面并选择该账号。后端验证正式账号，保存进程内导航目标并向该窗口发送 settings-navigate；不接受 URL 或路径 |
 | `settings_target` | 无 | `{tab:"application"\|"account",profile_id:string|null}`；设置窗口先监听导航，再读取最新目标，补偿创建／监听间隙；不写入配置或注册表 |
+| `appearance_state` | 无 | `AppearanceSnapshot={appearance,revision,editor}`；返回进程中有效外观（有预览则优先预览），不写盘。新窗口先监听再读取，较新 revision 优先 |
+| `preview_appearance` | `{appearance,editor}` | 仅 settings 窗口；校验完整外观及当前 editor，更新内存并同步所有窗口与原生标题栏，不写入配置 |
+| `save_appearance` | `{appearance,editor}` | 仅 settings 窗口；“应用主题”调用，成功写入配置后清除预览并广播快照；写入失败保留预览及原保存值 |
 | `open_login` | 无 | 打开／聚焦唯一 `login` 窗口；不创建正式账号，也不跳转到设置 |
 | `begin_login` | `{config:{phone,passphrase,remember_database,recovery_profile_id:string|null}}` | Profile ID；验证全局 API，分配唯一 ID 和最终隔离目录，创建 PendingLogin / Client 并初始化。只有 Ready 和 getMe 去重成功才正式登记。phone 仅保留在内存到实际 WaitPhoneNumber；recovery ID 仅允许已有待恢复记录，必须复用原目录和原密码 |
 | `login_status` | 无 | `(Connection & {phone_submitting:boolean})\|null`；当前 PendingLogin 快照，先监听再读取；自动提交手机号期间仅展示等待，拒绝时允许修正 |
@@ -95,6 +98,7 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 | `login-completed` | Profile ID，仅发送 main；刷新注册表、选择新账号、加载聊天 |
 | `login-error` | 脱敏错误；保持 PendingLogin，以便重试或安全取消 |
 | `settings-navigate` | 仅发给 settings，`{tab:"application"\|"account",profile_id:string|null}`；定位子页面及账号，不触发 Client 生命周期或修改主账号；新事件优先于尚未返回的初始目标读取 |
+| `appearance-changed` | `AppearanceSnapshot`；所有网页及原生窗口同步。设置窗口销毁时丢弃未应用预览，广播已保存外观并使旧 editor 失效；应用退出时不为回滚重新打开存储。网页串行并合并快速预览请求，拒绝旧 revision，防止迟到快照覆盖最新草稿 |
 | `accounts-changed` | 无敏感负载；前端重新读取 app_settings，刷新 getMe 更新后的 Profile |
 | `account-notice` | `{profile_id,detail}`；重复 Telegram 身份或元数据保存失败的提示 |
 | `app-error` | 安全关闭失败时的短错误；保持进程，允许重试 |
