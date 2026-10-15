@@ -21,7 +21,7 @@ function defaults(){draft.value={...defaultAppearance};preview();}
   <section class="settings-card" aria-labelledby="appearance-theme-title">
   <h3 id="appearance-theme-title">主题与界面</h3>
   <div class="appearance-presets" role="group" aria-label="主题">
-    <button v-for="option in [{id:'system',name:'跟随系统',icon:'◐'},{id:'light',name:'浅色',icon:'☀'},{id:'dark',name:'深色',icon:'☾'}]" :key="option.id" type="button" class="theme-tile" :class="{'is-selected':draft.theme===option.id}" :aria-pressed="draft.theme===option.id" @click="draft.theme=option.id as Appearance['theme'];preview()"><span class="theme-glyph" aria-hidden="true">{{option.icon}}</span><span>{{option.name}}</span></button>
+    <button v-for="option in [{id:'system',name:'跟随系统',icon:'◐'},{id:'light',name:'浅色',icon:'☀'},{id:'dark',name:'深色',icon:'☾'},{id:'glass',name:'液态玻璃',icon:'◈'}]" :key="option.id" type="button" class="theme-tile" :data-theme-option="option.id" :class="{'is-selected':draft.theme===option.id}" :aria-pressed="draft.theme===option.id" @click="draft.theme=option.id as Appearance['theme'];preview()"><span class="theme-glyph" aria-hidden="true">{{option.icon}}</span><span>{{option.name}}</span></button>
   </div>
   <div class="appearance-inline">
     <label>强调色

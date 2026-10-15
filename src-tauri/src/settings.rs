@@ -8,7 +8,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-#[derive(Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct AppearancePreferences {
     pub theme: String,
@@ -35,7 +35,7 @@ impl Default for AppearancePreferences {
 impl AppearancePreferences {
     pub fn validate(&self) -> Result<()> {
         let hex = self.accent.as_bytes();
-        if !matches!(self.theme.as_str(), "system" | "light" | "dark")
+        if !matches!(self.theme.as_str(), "system" | "light" | "dark" | "glass")
             || !matches!(self.density.as_str(), "compact" | "comfortable")
             || !matches!(self.elevation.as_str(), "flat" | "soft" | "raised")
             || !matches!(self.scrollbar.as_str(), "slim" | "standard")
@@ -918,6 +918,32 @@ fn replace(from: &Path, to: &Path) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn liquid_glass_appearance_survives_restart_without_changing_connection_settings() {
+        let root = temp_root();
+        let mut store = Store::open(root.clone()).unwrap();
+        let mut settings = store.settings();
+        settings.api_id = Some(12345);
+        settings.proxy_enabled = true;
+        settings.proxy_port = 7897;
+        store.set_settings(settings).unwrap();
+        let style = AppearancePreferences {
+            theme: "glass".into(),
+            accent: "#345678".into(),
+            ..AppearancePreferences::default()
+        };
+        store.set_appearance(style).unwrap();
+        drop(store);
+        let reopened = Store::open(root.clone()).unwrap();
+        let settings = reopened.settings();
+        assert_eq!(settings.appearance.theme, "glass");
+        assert_eq!(settings.appearance.accent, "#345678");
+        assert_eq!(settings.api_id, Some(12345));
+        assert!(settings.proxy_enabled);
+        assert_eq!(settings.proxy_port, 7897);
+        drop(reopened);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[test]
     fn old_logout_acceptance_flag_is_not_completed_and_pending_completion_is_durable() {
         let root = temp_root();
         let mut store = Store::open(root.clone()).unwrap();
@@ -1492,7 +1518,7 @@ mod appearance_preferences_tests {
     fn defaults_and_advanced_appearance_values_validate() {
         let mut style = AppearancePreferences::default();
         assert!(style.validate().is_ok());
-        for theme in ["light", "dark", "system"] {
+        for theme in ["light", "dark", "system", "glass"] {
             style.theme = theme.into();
             assert!(style.validate().is_ok());
         }

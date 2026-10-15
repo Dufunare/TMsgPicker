@@ -8,6 +8,7 @@ import './theme/components.css';
 import './theme/appearance-settings.css';
 import './workspace.css';
 import './theme/settings.css';
+import './theme/glass.css';
 
 void initializeAppearance();
 const view = new URLSearchParams(window.location.search).get('view');

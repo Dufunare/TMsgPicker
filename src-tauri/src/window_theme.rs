@@ -46,7 +46,13 @@ pub(super) fn apply_appearance(
     appearance: &crate::settings::AppearancePreferences,
 ) {
     let dark = appearance.theme == "dark" || (appearance.theme == "system" && system_dark());
-    let [r, g, b] = if dark { [20, 27, 39] } else { [246, 248, 252] };
+    let [r, g, b] = if dark {
+        [20, 27, 39]
+    } else if appearance.theme == "glass" {
+        [237, 243, 250]
+    } else {
+        [246, 248, 252]
+    };
     let text = if dark { [230, 238, 248] } else { [38, 55, 75] };
     let _ = window.set_background_color(Some(tauri::window::Color(r, g, b, 255)));
     #[cfg(windows)]

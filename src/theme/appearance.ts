@@ -3,7 +3,7 @@ import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen } from '@tauri-apps/api/event';
 
 export type Appearance = {
-  theme: 'system' | 'light' | 'dark';
+  theme: 'system' | 'light' | 'dark' | 'glass';
   accent: string;
   density: 'compact' | 'comfortable';
   radius: number;
@@ -44,7 +44,7 @@ function readableText(rgb: [number, number, number]): string {
 export function validAppearance(input: unknown): input is Appearance {
   if (!input || typeof input !== 'object') return false;
   const a = input as Record<string, unknown>;
-  return ['system', 'light', 'dark'].includes(String(a.theme))
+  return ['system', 'light', 'dark', 'glass'].includes(String(a.theme))
     && /^#[0-9a-fA-F]{6}$/.test(String(a.accent))
     && ['compact', 'comfortable'].includes(String(a.density))
     && Number.isInteger(a.radius) && (a.radius as number) >= 6 && (a.radius as number) <= 22
@@ -58,7 +58,7 @@ export function applyAppearance(next: Appearance) {
   Object.assign(current, next);
   const root = document.documentElement;
   const dark = isDark(next);
-  root.dataset.theme = dark ? 'dark' : 'light';
+  root.dataset.theme = next.theme === 'glass' ? 'glass' : dark ? 'dark' : 'light';
   root.dataset.density = next.density;
   root.dataset.elevation = next.elevation;
   root.dataset.scrollbar = next.scrollbar;
