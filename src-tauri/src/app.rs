@@ -1,3 +1,4 @@
+use crate::services::ChatListScope;
 use crate::settings::{AppearancePreferences, Settings, Snapshot, Store};
 use crate::{
     core::{self, MessageKey, QuerySpec, ScanResult},
@@ -1256,7 +1257,7 @@ async fn logout_account(app: tauri::AppHandle, profile_id: String, confirmed: bo
     .await
 }
 #[tauri::command]
-async fn chats(app: tauri::AppHandle, profile_id: String, search: String) -> Result<Vec<Chat>> {
+async fn chats(app: tauri::AppHandle, profile_id: String, search: String, scope: Option<ChatListScope>) -> Result<Vec<Chat>> {
     background(move || {
         let global = app.state::<AppState>();
         let _gate = global
@@ -1268,7 +1269,7 @@ async fn chats(app: tauri::AppHandle, profile_id: String, search: String) -> Res
             .lifecycle
             .try_lock()
             .map_err(|_| "Session operation in progress")?;
-        ChatService::list(gateway(&s)?.as_ref(), &search)
+        ChatService::list(gateway(&s)?.as_ref(), &search, scope.unwrap_or_default())
     })
     .await
 }
