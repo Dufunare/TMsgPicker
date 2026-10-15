@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {ref,computed,watch,onUnmounted} from 'vue';
-import {invoke} from '@tauri-apps/api/core';
+import {requestMedia} from '../media/mediaRequests';
 import type {Message} from '../types';
 const props=defineProps<{member:Message;profileId:string;generation:number}>();
 const emit=defineEmits<{browse:[]}>();
@@ -8,7 +8,7 @@ const src=ref(''),loading=ref(false),error=ref('');let revision=0;
 const photo=computed(()=>props.member.content_kind==='photo');
 const fileId=computed(()=>photo.value?props.member.full_file_id??props.member.thumbnail_file_id:props.member.thumbnail_file_id);
 async function load(){const id=fileId.value,token=++revision;src.value='';error.value='';if(!id)return;loading.value=true;
-try{const uri=await invoke<string|null>('photo_thumbnail',{profileId:props.profileId,fileId:id,full:photo.value});
+try{const uri=await requestMedia(props.profileId,props.generation,id,photo.value);
 if(token!==revision)return;if(uri?.startsWith('data:image/'))src.value=uri;else error.value='预览不可用';}
 catch(e){if(token===revision)error.value=String(e);}finally{if(token===revision)loading.value=false;}}
 watch([fileId,()=>props.profileId,()=>props.generation],()=>void load(),{immediate:true});
