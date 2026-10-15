@@ -222,6 +222,8 @@ pub struct Chat {
     pub kind: String,
     #[serde(default)]
     pub archived: bool,
+    #[serde(default)]
+    pub photo_file_id: Option<i32>,
 }
 
 #[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
@@ -246,6 +248,7 @@ impl ChatService {
             title: v["title"].as_str().unwrap_or("Untitled").into(),
             kind: v["type"]["@type"].as_str().unwrap_or("unknown").into(),
             archived,
+            photo_file_id: v["photo"]["small"]["id"].as_i64().and_then(|id| i32::try_from(id).ok()).filter(|id| *id > 0),
         })
     }
 
@@ -331,6 +334,32 @@ impl ChatService {
             }
         }
         Ok(out)
+    }
+    /// Return a small JPEG data URI; never expose local TDLib file paths to WebView.
+    /// TDLib owns downloaded files in its session directory and reuses its native cache.
+    pub fn thumbnail(
+        g: &dyn TelegramGateway,
+        file_id: i64,
+        files_root: &Path,
+    ) -> Result<Option<String>> {
+        if file_id <= 0 { return Ok(None); }
+        let cancel = AtomicBool::new(false);
+        let file = g.request(json!({"@type":"downloadFile","file_id":file_id,
+            "priority":1,"offset":0,"limit":0,"synchronous":true}), &cancel)?;
+        let local = &file["local"];
+        if local["is_downloading_completed"] != true { return Ok(None); }
+        let Some(path) = local["path"].as_str() else { return Ok(None) };
+        if path.is_empty() { return Ok(None); }
+        let resolved = std::fs::canonicalize(path).map_err(|_| "Thumbnail file unavailable")?;
+        let root = std::fs::canonicalize(files_root).map_err(|_| "Thumbnail root unavailable")?;
+        if !resolved.starts_with(root) { return Err("Thumbnail path outside current session".into()); }
+        let meta = std::fs::metadata(&resolved).map_err(|_| "Thumbnail metadata unavailable")?;
+        if meta.len() > 256 * 1024 { return Ok(None); }
+        let bytes = std::fs::read(resolved).map_err(|_| "Thumbnail read failed")?;
+        if bytes.len() > 256 * 1024 || bytes.len() < 3 { return Ok(None); }
+        // TDLib small chat/user photos are JPEG thumbnails.
+        if !bytes.starts_with(&[0xff,0xd8,0xff]) { return Ok(None); }
+        Ok(Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(&bytes))))
     }
     pub fn public(g: &dyn TelegramGateway, username: &str) -> Result<Chat> {
         Self::describe(g.request(
