@@ -1,23 +1,20 @@
 <script setup lang="ts">
-import {computed,ref,watch} from 'vue';
-import {requestAvatar,avatarKey,cachedAvatar} from '../media/avatarCache';
+import {ref,computed,watch,onUnmounted} from 'vue';
+import {invoke} from '@tauri-apps/api/core';
 import type {Message} from '../types';
 const props=defineProps<{member:Message;profileId:string;generation:number}>();
 const emit=defineEmits<{browse:[]}>();
-const busy=ref(false);
-const key=computed(()=>avatarKey(props.profileId,props.generation,props.member.thumbnail_file_id??undefined));
-const url=computed(()=>cachedAvatar(key.value)||props.member.minithumbnail||'');
-async function load(){if(!props.member.thumbnail_file_id||busy.value)return;busy.value=true;try{
- await requestAvatar(props.profileId,props.generation,props.member.thumbnail_file_id);
-}finally{busy.value=false;}}
-watch(()=>props.member.thumbnail_file_id,()=>void load(),{immediate:true});
-const kind=computed(()=>props.member.content_kind);
+const src=ref(''),loading=ref(false),error=ref('');let revision=0;
+const photo=computed(()=>props.member.content_kind==='photo');
+const fileId=computed(()=>photo.value?props.member.full_file_id??props.member.thumbnail_file_id:props.member.thumbnail_file_id);
+async function load(){const id=fileId.value,token=++revision;src.value='';error.value='';if(!id)return;loading.value=true;
+try{const uri=await invoke<string|null>('photo_thumbnail',{profileId:props.profileId,fileId:id,full:photo.value});
+if(token!==revision)return;if(uri?.startsWith('data:image/'))src.value=uri;else error.value='预览不可用';}
+catch(e){if(token===revision)error.value=String(e);}finally{if(token===revision)loading.value=false;}}
+watch([fileId,()=>props.profileId,()=>props.generation],()=>void load(),{immediate:true});
+onUnmounted(()=>++revision);
 </script>
-<template><div class="media-preview">
- <button type="button" class="media-preview-open" aria-label="打开媒体浏览器" @click="emit('browse')">
-  <img v-if="url?.startsWith('data:image/')" :src="url" :alt="kind+'预览'" loading="lazy"/>
-  <video v-else-if="url?.startsWith('data:video/mp4')" :src="url" muted playsinline preload="metadata"/>
-  <span v-else class="media-placeholder">{{kind==='photo'?'图片':kind==='video'?'视频':kind}}</span>
-  <span class="media-open-hint">查看大图 / 媒体</span>
- </button>
+<template><div class="media-preview" :class="{'media-preview-photo':photo}">
+<button v-if="photo" class="media-preview-open" type="button" :disabled="!member.full_file_id" @click="emit('browse')"><img v-if="src" :src="src" alt="图片原图"/><span v-else>{{loading?'加载中…':error||'图片'}}</span></button>
+<div v-else class="media-video-cover"><img v-if="src" :src="src" alt="视频封面"/><span v-else>{{loading?'加载封面…':error||'视频'}}</span><span class="video-kind-tag">视频</span></div>
 </div></template>
