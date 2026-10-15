@@ -4,6 +4,7 @@ import {useWorkspaceContext} from '../useWorkspace';
 import {accountStatus} from '../accountViews';
 import UiIcon from './UiIcon.vue';
 import AvatarPreview from './AvatarPreview.vue';
+import AppSelect from './AppSelect.vue';
 const {connection,statuses,busy,accountError,notice,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,disconnect,addAccount,selectAccount}=useWorkspaceContext();
 const menu=ref<HTMLDetailsElement>();
 const profile=computed(()=>snapshot.value?.profiles.find(p=>p.profile_id===profileId.value));
@@ -22,7 +23,7 @@ async function run(operation:()=>Promise<void>){closeMenu();await operation();}
       <div class="user-identity"><strong :title="profile.display_name">{{profile.display_name}}</strong><div class="user-meta"><span v-if="profile.username" class="username">@{{profile.username}}</span><span class="status-dot" :class="{online:status==='已连接',connecting:status==='连接中'}" :title="status"/><span class="user-status">{{status}}</span></div></div>
       <div class="account-tools">
         <button class="icon-button" title="添加账号" aria-label="添加账号" @click="addAccount"><UiIcon name="plus"/></button>
-        <div class="account-switch"><UiIcon name="chevron"/><select v-model="profileId" aria-label="切换账号" title="切换账号" @change="selectAccount(true)"><option v-for="p in snapshot?.profiles??[]" :key="p.profile_id" :value="p.profile_id">{{p.display_name}} · {{accountStatus(statuses[p.profile_id])}}</option></select></div>
+        <div class="account-switch"><AppSelect :model-value="profileId" label="切换账号" :options="(snapshot?.profiles??[]).map(p=>({value:p.profile_id,label:p.display_name+' · '+accountStatus(statuses[p.profile_id])}))" @update:model-value="profileId=String($event);selectAccount(true)"/></div>
         <details ref="menu" class="account-menu" @keydown.esc="closeMenu"><summary class="icon-button" aria-label="更多账号操作" title="更多账号操作"><UiIcon name="more"/></summary><div class="account-menu-items"><button v-if="connection.user_disconnected" :disabled="busy" @click="run(connectFromCard)">恢复连接</button><button v-else :disabled="busy||connection.runtime_state==='Closed'||connection.runtime_state==='Closing'||connection.runtime_state==='LogoutCleanupRequired'" @click="run(disconnect)">断开连接</button><button @click="run(openAccountSettings)">账号设置</button></div></details>
       </div>
     </div>
