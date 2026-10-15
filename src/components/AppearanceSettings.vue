@@ -49,6 +49,7 @@ function defaults(){draft.value={...defaultAppearance};preview();}
       <label><span class="setting-label">字号 <span class="setting-value">{{draft.font_scale}}%</span></span><input v-model.number="draft.font_scale" type="range" min="85" max="120" step="5" @input="preview"></label>
       <label>阴影层次<AppSelect v-model="draft.elevation" label="阴影层次" :options="[{value:'flat',label:'平面'},{value:'soft',label:'柔和'},{value:'raised',label:'浮起'}]" @change="preview"/></label>
       <label>滚动条<AppSelect v-model="draft.scrollbar" label="滚动条" :options="[{value:'slim',label:'纤细'},{value:'standard',label:'标准'}]" @change="preview"/></label>
+      <label class="motion-toggle"><input v-model="draft.animations" type="checkbox" @change="preview">启用界面动画</label>
       <label><span class="setting-label">图片预览大小 <span class="setting-value">{{draft.image_preview_size ?? 250}}px</span></span><input v-model.number="draft.image_preview_size" type="range" min="120" max="520" step="20" @input="preview"></label>
       <label><span class="setting-label">布局间距 <span class="setting-value">{{draft.spacing ?? 100}}%</span></span><input v-model.number="draft.spacing" type="range" min="75" max="140" step="5" @input="preview"></label>
       <label><span class="setting-label">玻璃不透明度 <span class="setting-value">{{draft.glass_opacity ?? 48}}%</span></span><input v-model.number="draft.glass_opacity" type="range" min="20" max="90" step="5" :disabled="draft.theme!=='glass'" @input="preview"></label>

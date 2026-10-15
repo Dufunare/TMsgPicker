@@ -26,3 +26,12 @@ test('glass preview preserves custom preferences and switching themes replaces t
   applyAppearance({...defaultAppearance,theme:'light'});
   assert.equal(root.dataset.theme,'light');assert.equal(root.style.colorScheme,'light');
 });
+
+test('appearance motion can be disabled without losing previous palette preferences',()=>{
+  applyAppearance({...defaultAppearance,theme:'glass',animations:false});
+  assert.equal(root.dataset.motion,'off');
+  assert.equal(root.dataset.theme,'glass');
+  applyAppearance({...defaultAppearance,theme:'glass',animations:true});
+  assert.equal(root.dataset.motion,'on');
+  assert.equal(validAppearance({...defaultAppearance,animations:'no'}),false);
+});

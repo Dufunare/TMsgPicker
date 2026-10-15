@@ -37,3 +37,7 @@
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) {
   :root[data-theme="glass"] { --surface:#f6f9fd; --surface-subtle:#f9fbfe; --surface-muted:#eaf0f8; --field:#ffffff; }
 }
+
+@keyframes liquid-glass-drift {0%{background-position:0% 0%;}50%{background-position:100% 75%;}100%{background-position:0% 0%;}}
+:root[data-theme="glass"][data-motion="on"] :where(body,.workspace,.settings-page) {background-size:170% 170%;animation:liquid-glass-drift 24s ease-in-out infinite;}
+@media(prefers-reduced-motion:reduce){:root[data-theme="glass"] :where(body,.workspace,.settings-page){animation:none!important;}}

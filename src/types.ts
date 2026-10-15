@@ -7,10 +7,10 @@ export interface ScanResult { run_id: string; status: 'Scanning' | 'Partial' | '
 export interface Chat { id: string; title: string; kind: string; archived?: boolean; photo_file_id?: number|null; photo_big_file_id?: number|null; photo_minithumbnail?: string|null }
 export type ChatScope = 'all' | 'main' | 'archive';
 export interface Connection { profile_id: string | null; generation: number; runtime_state: string; auth_state: string; connection_state: string; detail: string; user_disconnected: boolean }
-export type FieldName = 'views' | 'forwards' | 'comments' | 'reply_info' | 'reaction_total' | 'reaction' | 'post_kind' | 'media_album_id' | 'content_kind' | 'date';
+export type FieldName = 'views' | 'forwards' | 'comments' | 'reply_info' | 'reaction_total' | 'reaction' | 'date';
 export interface Field { kind: FieldName; emoji?: string }
 export type CompareOp = 'eq' | 'ne' | 'gt' | 'ge' | 'lt' | 'le';
-export type Filter = { kind: 'compare'; field: Field; op: CompareOp; value: number | string } | { kind: 'is_null' | 'is_not_null'; field: Field } | { kind: 'and' | 'or'; items: Filter[] } | { kind: 'not'; item: Filter };
+export type Filter = { kind: 'compare'; field: Field; op: CompareOp; value: number | string } | { kind: 'is_null' | 'is_not_null'; field: Field } | { kind: 'contains_content'; content_kind: string; exists: boolean } | { kind: 'and' | 'or'; items: Filter[] } | { kind: 'not'; item: Filter };
 export interface QuerySpec { version: 1; chat_id: string; scope: { kind: 'recent'; count: number } | { kind: 'dates'; from: number; to: number; budget: number }; filter: Filter; sort: { field: Field; descending: boolean }[]; output_limit: number }
 export interface ActionItem { source: MessageKey; state: string; detail: string; sent_id: string | null }
 export interface ForwardReport { items: ActionItem[] }

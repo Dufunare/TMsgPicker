@@ -131,7 +131,6 @@ async function switchChatScope(scope:ChatScope){
 }
 async function resolvePublic() {const id=profileId.value,v=view.value;await chatAction(async()=>{const c=await invokeCommand<Chat>('public_chat',{profileId:id,username:v.search});if(accountViews.views[id]!==v)return;if(v.chatScope==='all'||(v.chatScope==='archive'?c.archived===true:c.archived!==true)){if(!v.chatList.some(x=>x.id===c.id))v.chatList.unshift(c);}v.selectedChat=c;});}
 async function savedMessages() {const id=profileId.value,v=view.value;await action(async()=>{const c=await invokeCommand<Chat>('saved_messages',{profileId:id});if(accountViews.views[id]!==v)return;if(!v.chatList.some(x=>x.id===c.id))v.chatList.push(c);v.target=c.id;v.confirmation=false;v.confirmedSelection=null;});}
-function preset() {filter.value={kind:'not',item:{kind:'and',items:[{kind:'is_null',field:{kind:'reply_info'}},{kind:'compare',field:{kind:'post_kind'},op:'eq',value:'single'}]}};}
 async function runQuery() {
   const id=profileId.value,v=view.value;
   v.error='';if(!v.selectedChat){v.error='请先选择一个聊天';return;}
@@ -195,7 +194,7 @@ onMounted(async () => {
 });
 onUnmounted(()=>{unlisteners.forEach(fn=>fn());clearTimeout(chatTimer);clearAvatars();answerDialog(null);});
 
-return { dialog,answerDialog,chatScope,switchChatScope,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,preset,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetReport,resetBusy,resetLayout,resizeLayout };
+return { dialog,answerDialog,chatScope,switchChatScope,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetReport,resetBusy,resetLayout,resizeLayout };
 }
 export type Workspace = ReturnType<typeof useWorkspace>;
 export const workspaceKey=Symbol("workspace");
