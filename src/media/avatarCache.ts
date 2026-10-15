@@ -15,13 +15,15 @@ export function avatarKey(profile:string,generation:number,id:number|undefined):
 }
 export function cachedAvatar(key:string){ return urls[key]??''; }
 async function slot(){
-  if(active>=MAX_ACTIVE)await new Promise<void>(resolve=>waiters.push(resolve));
-  active++;
+  if(active>=MAX_ACTIVE) {
+    // The resolving waiter inherits the released permit.
+    await new Promise<void>(resolve=>waiters.push(resolve));
+  } else active++;
 }
 function release(){
-  active=Math.max(0,active-1);
   const wake=waiters.shift();
   if(wake)wake();
+  else active=Math.max(0,active-1);
 }
 export async function requestAvatar(profile:string,generation:number,id?:number):Promise<string>{
   if(!profile || !Number.isInteger(generation) || generation<=0)return '';
