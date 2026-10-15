@@ -1299,7 +1299,7 @@ async fn open_image_gallery(app: tauri::AppHandle, window: tauri::WebviewWindow,
         } else {
             tauri::WebviewWindowBuilder::new(&app,MEDIA_WINDOW,tauri::WebviewUrl::App("index.html?view=media".into()))
                 .title("图片浏览").inner_size(1080.0,760.0).min_inner_size(480.0,320.0)
-                .decorations(false).transparent(true).shadow(false).skip_taskbar(true).center()
+                .decorations(false).transparent(true).shadow(false).skip_taskbar(true).always_on_top(true).center()
                 .build().map_err(|_|"Cannot open media window")?;
         }
         Ok(())
