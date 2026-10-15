@@ -278,54 +278,59 @@ impl ChatService {
 
     pub fn list(g: &dyn TelegramGateway, search: &str, scope: ChatListScope) -> Result<Vec<Chat>> {
         let cancel = AtomicBool::new(false);
-        let search = search.trim();
-        let normalized = search.trim_start_matches('@').to_lowercase();
-        let mut result = Vec::new();
-        let mut seen = BTreeSet::new();
-
-        if scope != ChatListScope::Archive {
-            Self::load_list(g, "chatListMain", &cancel, 1)?;
-            let main = if search.is_empty() {
-                g.request(
-                    json!({"@type":"getChats","chat_list":{"@type":"chatListMain"},"limit":100}),
-                    &cancel,
-                )?
-            } else {
-                // TDLib searchChats is offline and ordered by the main list; it cannot
-                // replace an explicit traversal of the Archive list.
-                g.request(json!({"@type":"searchChats","query":search,"limit":100}), &cancel)?
-            };
-            for cid in Self::ids(main)? {
-                let chat = Self::describe(g.request(json!({"@type":"getChat","chat_id":cid}), &cancel)?)?;
-                if (scope == ChatListScope::Main && chat.archived) || !seen.insert(chat.id.clone()) {
-                    continue;
-                }
-                result.push(chat);
+        let query = search.trim();
+        let query_lower = query.to_lowercase();
+        // searchChats includes known archived chats too. Its ordering is Main-biased;
+        // its IDs alone must NEVER determine membership in Main vs Archive.
+        let matched_ids = if query.is_empty() {
+            BTreeSet::new()
+        } else {
+            Self::ids(g.request(json!({"@type":"searchChats","query":query,"limit":100}), &cancel)?)?
+                .into_iter()
+                .filter_map(|id| id.as_i64().map(|v| v.to_string()))
+                .collect::<BTreeSet<_>>()
+        };
+        let mut out = Vec::<Chat>::new();
+        let mut seen = BTreeSet::<String>::new();
+        for (list, is_archive) in [("chatListMain", false), ("chatListArchive", true)] {
+            if scope == ChatListScope::Main && is_archive
+                || scope == ChatListScope::Archive && !is_archive
+            {
+                continue;
             }
-        }
-        if scope != ChatListScope::Main {
-            // loadChats can return a short page. For a named search, gradually
-            // populate the archive instead of searching only the first 100 chats.
-            // Keep the work bounded for accounts with extremely large archives.
-            Self::load_list(g, "chatListArchive", &cancel, if search.is_empty() { 1 } else { 12 })?;
-            let archive = g.request(
-                json!({"@type":"getChats","chat_list":{"@type":"chatListArchive"},"limit":if search.is_empty() { 100 } else { 1200 }}),
+            // getChats(chatListX) is the authoritative list membership. In contrast,
+            // searchChats isn't scoped, and getChat.positions may be temporarily stale.
+            Self::load_list(g, list, &cancel, if query.is_empty() { 1 } else { 6 })?;
+            let page = g.request(
+                json!({"@type":"getChats","chat_list":{"@type":list},
+                    "limit":if query.is_empty() { 100 } else { 600 }}),
                 &cancel,
             )?;
-            for cid in Self::ids(archive)? {
-                let mut chat = Self::describe(g.request(json!({"@type":"getChat","chat_id":cid}), &cancel)?)?;
-                chat.archived = true;
-                if !search.is_empty() && !chat.title.to_lowercase().contains(&normalized) {
+            for id in Self::ids(page)? {
+                let mut chat = Self::describe(g.request(
+                    json!({"@type":"getChat","chat_id":id}), &cancel,
+                )?)?;
+                if !is_archive && chat.archived {
+                    // A stale duplicate must not leak into the Main-only view.
+                    continue;
+                }
+                chat.archived = is_archive;
+                if !query.is_empty()
+                    && !chat.title.to_lowercase().contains(&query_lower)
+                    && !matched_ids.contains(&chat.id)
+                {
                     continue;
                 }
                 if seen.insert(chat.id.clone()) {
-                    result.push(chat);
-                } else if let Some(existing) = result.iter_mut().find(|v: &&mut Chat| v.id == chat.id) {
-                    existing.archived = true;
+                    out.push(chat);
+                } else if is_archive {
+                    if let Some(old) = out.iter_mut().find(|item| item.id == chat.id) {
+                        old.archived = true;
+                    }
                 }
             }
         }
-        Ok(result)
+        Ok(out)
     }
     pub fn public(g: &dyn TelegramGateway, username: &str) -> Result<Chat> {
         Self::describe(g.request(
