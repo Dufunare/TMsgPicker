@@ -14,7 +14,7 @@ export function safeExternalUrl(raw: string): string | undefined {
 
 /** Preserve existing automatic linking of visibly written HTTP(S) addresses. */
 function appendVisibleUrls(parts: LinkedPart[], text: string) {
-  const re = /https?:\/\/[^\s<>"']+/gi;
+  const re = /https?:\/\/[^\s<>"'，。！？）]+/gi;
   let cursor = 0;
   for (const match of text.matchAll(re)) {
     const start = match.index ?? 0;
