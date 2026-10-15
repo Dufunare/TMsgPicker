@@ -103,3 +103,22 @@ select {
 .post-actions button {min-height:28px;padding:4px 10px;font-size:11px;}
 .post-details {margin-top:12px;padding-top:11px;border-top:1px solid var(--border-subtle);font-size:11px;color:var(--text-muted);}
 .post-details > div {margin:4px 0;}
+
+.linked-text {white-space:pre-wrap;overflow-wrap:anywhere;}
+.linked-text a {color:var(--accent);text-decoration:underline;text-underline-offset:3px;font-weight:600;}
+.linked-text a:hover {color:var(--accent-hover);}
+.post-media {margin:12px 0;}
+.media-expander {width:100%;justify-content:space-between;background:var(--surface-muted);border-color:var(--border-subtle);}
+.media-expander span {color:var(--accent);font-size:11px;}
+.media-grid {display:grid;grid-template-columns:repeat(auto-fill,minmax(135px,1fr));gap:9px;margin-top:9px;}
+.media-preview {min-height:100px;background:var(--surface-muted);border:1px solid var(--border);border-radius:calc(var(--radius)*.7);overflow:hidden;display:grid;place-items:center;}
+.media-preview img {width:100%;height:auto;max-height:260px;object-fit:contain;}
+.media-placeholder {display:flex;flex-direction:column;align-items:center;gap:10px;padding:20px;color:var(--text-muted);}
+.app-select {position:relative;min-width:0;width:100%;}
+.app-select-trigger {width:100%;min-height:var(--control-height);background:var(--field);border:1px solid var(--border);border-radius:calc(var(--radius)*.72);justify-content:space-between;padding:6px 11px;text-align:left;font-weight:450;}
+.app-select-chevron {font-size:18px;line-height:1;color:var(--text-muted);}
+.app-select-menu {position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:40;max-height:270px;overflow-y:auto;background:var(--surface);border:1px solid var(--border);box-shadow:var(--shadow-popover);border-radius:calc(var(--radius)*.8);padding:5px;outline:0;}
+.app-select-option {display:flex;justify-content:flex-start;width:100%;min-height:30px;padding:6px 10px;text-align:left;background:transparent;border:0;border-radius:calc(var(--radius)*.52);font-weight:450;}
+.app-select-option:hover,.app-select-option.active {background:var(--hover);}
+.app-select-option[aria-selected="true"] {background:var(--accent-soft);color:var(--accent);}
+.filter-node:has(.app-select-menu) {position:relative;z-index:8;}
