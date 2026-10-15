@@ -122,3 +122,30 @@ test('bound account settings target remains A while another window switches its 
   await account.disconnect();
   assert.equal(account.profileId.value,'A');assert.deepEqual(calls.at(-1),{command:'disconnect',args:{profileId:'A',closeConfirmation:null}});
 });
+
+test('chat scope is sent in IPC and late replies never replace the selected list', async()=>{
+  const pending:Array<{scope:string;resolve:(value:unknown)=>void}>=[];
+  let w!:ReturnType<typeof useWorkspace>;
+  const transport=async(command:string,args:unknown)=>{
+    if(command==='chats')return new Promise<unknown>(resolve=>pending.push({scope:(args as {scope:string}).scope,resolve}));
+    return undefined;
+  };
+  const app=renderer.createApp({setup(){w=useWorkspace(false,transport as Parameters<typeof useWorkspace>[1]);return()=>h('div');}});
+  app.mount({});
+  w.profileId.value='A';w.statuses.A=status('A');
+  const previous=w.loadChats();await new Promise(resolve=>setImmediate(resolve));
+  const switched=w.switchChatScope('archive');await new Promise(resolve=>setImmediate(resolve));
+  assert.deepEqual(pending.map(item=>item.scope),['all','archive']);
+  pending[1]!.resolve([{id:'2',title:'Archived',kind:'group',archived:true}]);
+  await switched;
+  assert.deepEqual(w.chatList.value.map(x=>x.id),['2']);
+  pending[0]!.resolve([{id:'1',title:'Stale main result',kind:'group',archived:false}]);
+  await previous;
+  assert.deepEqual(w.chatList.value.map(x=>x.id),['2']);
+  const main=w.switchChatScope('main');await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(pending.at(-1)!.scope,'main');
+  pending.at(-1)!.resolve([{id:'2',title:'Incorrect archived reply',kind:'group',archived:true},{id:'1',title:'Main',kind:'group',archived:false}]);
+  await main;
+  assert.deepEqual(w.chatList.value.map(x=>x.id),['1']);
+  app.unmount();
+});
