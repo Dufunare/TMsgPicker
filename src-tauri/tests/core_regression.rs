@@ -679,10 +679,11 @@ fn album_cross_page_metrics_provenance_and_cross_chat() {
     let posts = assemble(&f);
     assert_eq!(posts.len(), 4);
     let album = posts.iter().find(|p| p.members.len() == 2).unwrap();
-    assert_eq!(album.metrics.views, Some(90));
-    assert_eq!(album.metrics.forwards, Some(7));
-    assert_eq!(album.metrics.reply_info, Some(0));
-    assert_eq!(album.provenance["reactions"], "299");
+    assert_eq!(album.metrics.views, Some(99));
+    assert_eq!(album.metrics.forwards, Some(8));
+    assert_eq!(album.metrics.reply_info, None);
+    assert_eq!(album.metrics.reactions, None);
+    assert_eq!(album.provenance["reactions"], "300");
     assert!(album.partial);
     let raws: Vec<Value> = serde_json::from_str(include_str!("fixtures/messages.json")).unwrap();
     let g = MockTelegramGateway::pages(vec![
@@ -741,14 +742,10 @@ fn ids_reactions_fallback_and_null_zero_semantics() {
         ),
         Truth::True
     );
-    assert_eq!(
-        field_value(album, &Field::Reaction("👍".into())),
-        Some(Scalar::Number(3))
-    );
-    assert_eq!(
-        field_value(album, &Field::ReactionTotal),
-        Some(Scalar::Number(6))
-    );
+    // The caption-bearing primary (message 300) has unknown reactions.
+    // Do not borrow reaction counts from the other album member.
+    assert_eq!(field_value(album, &Field::Reaction("👍".into())), None);
+    assert_eq!(field_value(album, &Field::ReactionTotal), None);
     assert_eq!(
         field_value(zero, &Field::Reaction("👍".into())),
         Some(Scalar::Number(0))
