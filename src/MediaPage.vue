@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import {computed,ref,onMounted,onUnmounted,watch,nextTick} from 'vue';
 import {invoke} from '@tauri-apps/api/core';
+import {requestMedia} from './media/mediaRequests';
 import {listen} from '@tauri-apps/api/event';
 type Gallery={profile_id:string;generation:number;image_file_ids:number[];index:number};
 const gallery=ref<Gallery|null>(null),index=ref(0),image=ref(''),loading=ref(false),error=ref('');
@@ -15,7 +16,7 @@ function reset(){scale.value=1;x.value=0;y.value=0;}
 async function fetchImage(){const g=gallery.value;if(!g)return;const token=++revision;
  reset();image.value='';error.value='';loading.value=true;
  try{const fileId=g.image_file_ids[index.value];if(!fileId)return;
- const response=await invoke<string|null>('photo_thumbnail',{profileId:g.profile_id,fileId,full:true});
+ const response=await requestMedia(g.profile_id,g.generation,fileId,true);
  if(token!==revision)return;
  if(response?.startsWith('data:image/'))image.value=response;
  else error.value='无法载入原图（文件过大或暂未下载完成）';
