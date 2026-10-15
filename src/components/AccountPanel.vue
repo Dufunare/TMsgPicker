@@ -18,7 +18,7 @@ async function run(operation:()=>Promise<void>){closeMenu();await operation();}
   <div class="account-strip">
     <div v-if="!profile" class="account-empty"><p>尚未添加 Telegram 账号</p><button class="primary" @click="addAccount">添加账号</button></div>
     <div v-else class="user-card">
-      <AvatarPreview :profile-id="profileId" :generation="connection.generation" :name="profile.display_name"/>
+      <AvatarPreview account :profile-id="profileId" :generation="connection.generation" :name="profile.display_name"/>
       <div class="user-identity"><strong :title="profile.display_name">{{profile.display_name}}</strong><div class="user-meta"><span v-if="profile.username" class="username">@{{profile.username}}</span><span class="status-dot" :class="{online:status==='已连接',connecting:status==='连接中'}" :title="status"/><span class="user-status">{{status}}</span></div></div>
       <div class="account-tools">
         <button class="icon-button" title="添加账号" aria-label="添加账号" @click="addAccount"><UiIcon name="plus"/></button>
