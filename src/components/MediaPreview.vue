@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import {ref,computed,watch,onUnmounted} from 'vue';
-import {requestMedia} from '../media/mediaRequests';
+import {requestMedia} from '../media/mediaRequests.ts';
 import type {Message} from '../types';
 const props=defineProps<{member:Message;profileId:string;generation:number}>();
 const emit=defineEmits<{browse:[]}>();
