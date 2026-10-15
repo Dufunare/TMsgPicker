@@ -4,6 +4,8 @@ main { max-width:none; }
 .workspace {
   height:100%; display:grid; gap:0; padding:calc(10px * var(--spacing-scale,1)); align-items:stretch;
   position:relative; overflow-x:auto; background:var(--canvas);
+  padding-top: calc(5px * var(--spacing-scale, 1));
+  padding-bottom: calc(15px * var(--spacing-scale, 1));
 }
 .left-column,.middle-column,.right-column {
   min-width:0; min-height:0; border:1px solid var(--border);

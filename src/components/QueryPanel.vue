@@ -7,7 +7,7 @@ const {ready,busy,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,
 </script>
 <template>
 <section class="panel builder"><h2>查询</h2><p v-if="selectedChat" class="muted query-context">{{selectedChat.title}}</p><form @submit.prevent="runQuery">
-        <label>扫描范围<AppSelect v-model="scopeKind" :options="[{value:'recent',label:'最近 N 个帖子（媒体组计一条）'},{value:'dates',label:'日期范围'}]" label="扫描范围"/></label>
+        <label>扫描范围<AppSelect v-model="scopeKind" :options="[{value:'recent',label:'最近 N 个帖子'},{value:'dates',label:'日期范围'}]" label="扫描范围"/></label>
         <label v-if="scopeKind==='recent'">帖子数量<input v-model.number="rawCount" type="number" min="1" max="100000" required></label>
         <template v-else><label>开始（本地时间）<AppDateTime v-model="fromDate" label="开始时间"/></label><label>结束（不包含）<AppDateTime v-model="toDate" label="结束时间"/></label><label>最多扫描原始消息<input v-model.number="budget" type="number" min="1" max="100000" required></label></template>
         <h3>条件</h3><FilterEditor v-model="filter"/>
