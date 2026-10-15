@@ -11,11 +11,15 @@ export type Appearance = {
   font_scale: number;
   elevation: 'flat' | 'soft' | 'raised';
   scrollbar: 'slim' | 'standard';
+  glass_opacity?: number;
+  glass_blur?: number;
+  spacing?: number;
 };
 
 export const defaultAppearance: Appearance = {
   theme: 'system', accent: '#4277cf', density: 'comfortable',
   radius: 12, font_scale: 100, elevation: 'soft', scrollbar: 'slim',
+  glass_opacity: 48, glass_blur: 30, spacing: 100,
 };
 
 const current = reactive<Appearance>({ ...defaultAppearance });
@@ -54,12 +58,16 @@ export function validAppearance(input: unknown): input is Appearance {
     && Number.isInteger(a.radius) && (a.radius as number) >= 6 && (a.radius as number) <= 22
     && Number.isInteger(a.font_scale) && (a.font_scale as number) >= 85 && (a.font_scale as number) <= 120
     && ['flat', 'soft', 'raised'].includes(String(a.elevation))
-    && ['slim', 'standard'].includes(String(a.scrollbar));
+    && ['slim', 'standard'].includes(String(a.scrollbar))
+    && (a.glass_opacity === undefined || (Number.isInteger(a.glass_opacity) && (a.glass_opacity as number) >= 20 && (a.glass_opacity as number) <= 90))
+    && (a.glass_blur === undefined || (Number.isInteger(a.glass_blur) && (a.glass_blur as number) >= 0 && (a.glass_blur as number) <= 60))
+    && (a.spacing === undefined || (Number.isInteger(a.spacing) && (a.spacing as number) >= 75 && (a.spacing as number) <= 140));
 }
 
 export function applyAppearance(next: Appearance) {
   if (!validAppearance(next)) return;
-  Object.assign(current, next);
+  const resolved = {...defaultAppearance,...next};
+  Object.assign(current, resolved);
   const root = document.documentElement;
   const dark = isDark(next);
   root.dataset.theme = next.theme === 'glass' ? 'glass' : dark ? 'dark' : 'light';
@@ -75,6 +83,9 @@ export function applyAppearance(next: Appearance) {
   root.style.setProperty('--font-scale', String(next.font_scale / 100));
   root.style.setProperty('--density-factor', next.density === 'compact' ? '0.84' : '1');
   root.style.setProperty('--scrollbar-width', next.scrollbar === 'slim' ? '7px' : '11px');
+  root.style.setProperty('--glass-opacity', String((resolved.glass_opacity ?? 48) / 100));
+  root.style.setProperty('--glass-blur', `${resolved.glass_blur ?? 30}px`);
+  root.style.setProperty('--spacing-scale', String((resolved.spacing ?? 100) / 100));
   if (isTauri()) document.documentElement.dataset.desktop = 'true';
 }
 
