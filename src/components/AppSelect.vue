@@ -23,7 +23,7 @@ function outside(e:PointerEvent){if(root.value&&!root.value.contains(e.target as
 onMounted(()=>document.addEventListener('pointerdown',outside));onUnmounted(()=>document.removeEventListener('pointerdown',outside));
 </script>
 <template><div ref="root" class="app-select" @keydown="keydown">
-  <button type="button" class="app-select-trigger" :disabled="disabled" :aria-label="label" :aria-expanded="open" aria-haspopup="listbox" @click="toggle">{{display}}<span aria-hidden="true" class="app-select-chevron">⌄</span></button>
+  <button type="button" class="app-select-trigger" :disabled="disabled" :aria-label="label" :aria-expanded="open" aria-haspopup="listbox" @click="toggle">{{display}}<span aria-hidden="true" class="app-select-chevron"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></span></button>
   <div v-if="open" ref="menu" role="listbox" class="app-select-menu" tabindex="-1" :aria-label="label">
    <button v-for="(item,i) in options" :key="String(item.value)" type="button" role="option" class="app-select-option" :aria-selected="item.value===modelValue" :class="{active:active===i}" :disabled="item.disabled" @mouseenter="active=i" @click="pick(item)">{{item.label}}</button>
   </div>

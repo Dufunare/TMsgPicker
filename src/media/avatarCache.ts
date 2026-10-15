@@ -40,9 +40,9 @@ export async function requestAvatar(profile:string,generation:number,id?:number)
     await slot();
     try{
       if((generations.get(profile)??0)!==revision)return '';
-      const response=await invoke<string|null>('photo_thumbnail',{profileId:profile,fileId:id??null});
+      const response=await invoke<string|null>('photo_thumbnail',{profileId:profile,fileId:id??null,full:false});
       if((generations.get(profile)??0)!==revision)return '';
-      const url=response?.startsWith('data:image/jpeg;base64,')?response:'';
+      const url=response && /^data:(image\/(jpeg|png|webp|gif)|video\/mp4);base64,/.test(response)?response:'';
       if(url.length>350_000)return '';
       cache.set(key,{url,expires:Date.now()+(url?TTL:60_000)});
       urls[key]=url;

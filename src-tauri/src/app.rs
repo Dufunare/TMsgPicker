@@ -1278,6 +1278,7 @@ async fn photo_thumbnail(
     app: tauri::AppHandle,
     profile_id: String,
     file_id: Option<i32>,
+    full: Option<bool>,
 ) -> Result<Option<String>> {
     background(move || {
         let global = app.state::<AppState>();
@@ -1294,13 +1295,13 @@ async fn photo_thumbnail(
                 fallback = me["profile_photo"]["minithumbnail"]["data"].as_str()
                     .filter(|data|data.len()<16_384 && data.chars().all(|c|c.is_ascii_alphanumeric()||matches!(c,'+'|'/'|'=')))
                     .map(|data|format!("data:image/jpeg;base64,{data}"));
-                let Some(id) = me["profile_photo"]["small"]["id"].as_i64().and_then(|id| i32::try_from(id).ok()) else {return Ok(fallback)};
+                let Some(id) = me["profile_photo"]["big"]["id"].as_i64().or_else(||me["profile_photo"]["small"]["id"].as_i64()).and_then(|id| i32::try_from(id).ok()) else {return Ok(fallback)};
                 id
             }
         };
         // File content is only read from this account's TDLib-managed files directory.
         let root = with_store(&global, |store| Ok(store.session_root(&profile_id)?))?;
-        match ChatService::thumbnail(g.as_ref(), i64::from(id), &root.join("files")) {
+        match ChatService::media_data(g.as_ref(), i64::from(id), &root.join("files"), full.unwrap_or(false)) {
             Ok(Some(photo)) => Ok(Some(photo)),
             // A small TDLib minithumbnail is preferable to an empty account card
             // while a larger photo is temporarily unavailable.

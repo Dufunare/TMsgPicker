@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import {reactive} from 'vue';
+import {reactive,ref} from 'vue';
 import {useWorkspaceContext} from '../useWorkspace';
 import LinkedText from './LinkedText.vue';
 import MediaPreview from './MediaPreview.vue';
+import MediaBrowser from './MediaBrowser.vue';
 const {busy,error,chatList,selectedChat,result,scanning,openPost,count,reactionLabel,date,profileId,connection}=useWorkspaceContext();
 const expanded=reactive<Record<string,boolean>>({});
+const browser=ref<{items:import('../types').Message[];index:number}|null>(null);
 const mediaKinds=new Set(['photo','video','animation','video_note','document','audio','voice_note','sticker']);
 function hasMedia(members:{content_kind:string}[]){return members.some(m=>mediaKinds.has(m.content_kind));}
 </script>
@@ -27,11 +29,12 @@ function hasMedia(members:{content_kind:string}[]){return members.some(m=>mediaK
           <span>{{expanded[post.key]?'收起媒体':'展开媒体'}}</span>
         </button>
         <div v-if="expanded[post.key]" class="media-grid">
-          <MediaPreview v-for="member in post.members.filter(m=>mediaKinds.has(m.content_kind))" :key="member.key.message_id" :member="member" :profile-id="profileId" :generation="connection.generation"/>
+          <MediaPreview v-for="member in post.members.filter(m=>mediaKinds.has(m.content_kind))" :key="member.key.message_id" :member="member" :profile-id="profileId" :generation="connection.generation" @browse="browser={items:post.members.filter(m=>mediaKinds.has(m.content_kind)),index:post.members.filter(m=>mediaKinds.has(m.content_kind)).findIndex(m=>m.key.message_id===member.key.message_id)}"/>
         </div>
       </div>
       <div class="metrics"><span>浏览 <b>{{count(post.metrics.views)}}</b></span><span>转发 <b>{{count(post.metrics.forwards)}}</b></span><span>评论 <b>{{count(post.metrics.reply_info)}}</b></span></div>
       <div class="reactions"><span v-if="post.metrics.reactions===null">反应 —</span><span v-else-if="!post.metrics.reactions.length">反应 0</span><span v-for="(reaction,i) in post.metrics.reactions??[]" :key="i">{{reactionLabel(reaction.key)}} {{count(reaction.count)}}</span></div>
     </article>
+  <MediaBrowser v-if="browser" :items="browser.items" :index="browser.index" :profile-id="profileId" :generation="connection.generation" @close="browser=null"/>
   </section>
 </template>

@@ -225,6 +225,8 @@ pub struct Chat {
     #[serde(default)]
     pub photo_file_id: Option<i32>,
     #[serde(default)]
+    pub photo_big_file_id: Option<i32>,
+    #[serde(default)]
     pub photo_minithumbnail: Option<String>,
 }
 
@@ -251,6 +253,7 @@ impl ChatService {
             kind: v["type"]["@type"].as_str().unwrap_or("unknown").into(),
             archived,
             photo_file_id: v["photo"]["small"]["id"].as_i64().and_then(|id| i32::try_from(id).ok()).filter(|id| *id > 0),
+            photo_big_file_id: v["photo"]["big"]["id"].as_i64().and_then(|id| i32::try_from(id).ok()).filter(|id| *id > 0),
             photo_minithumbnail: v["photo"]["minithumbnail"]["data"].as_str()
                 .filter(|value|value.len()<16_384&&value.chars().all(|c|c.is_ascii_alphanumeric()||matches!(c,'+'|'/'|'=')))
                 .map(|value|format!("data:image/jpeg;base64,{value}")),
@@ -340,31 +343,37 @@ impl ChatService {
         }
         Ok(out)
     }
-    /// Return a small JPEG data URI; never expose local TDLib file paths to WebView.
-    /// TDLib owns downloaded files in its session directory and reuses its native cache.
-    pub fn thumbnail(
-        g: &dyn TelegramGateway,
-        file_id: i64,
-        files_root: &Path,
+    /// Read only TDLib-owned media, sniff the actual file format, and strictly bound
+    /// transfer size. The WebView receives no filesystem path.
+    pub fn media_data(
+        g: &dyn TelegramGateway, file_id: i64, files_root: &Path, full: bool
     ) -> Result<Option<String>> {
         if file_id <= 0 { return Ok(None); }
         let cancel = AtomicBool::new(false);
+        let limit = if full { 12 * 1024 * 1024 } else { 2 * 1024 * 1024 };
         let file = g.request(json!({"@type":"downloadFile","file_id":file_id,
-            "priority":1,"offset":0,"limit":0,"synchronous":true}), &cancel)?;
-        let local = &file["local"];
-        if local["is_downloading_completed"] != true { return Ok(None); }
-        let Some(path) = local["path"].as_str() else { return Ok(None) };
+            "priority":if full {16} else {3},"offset":0,"limit":0,"synchronous":true}), &cancel)?;
+        if file["local"]["is_downloading_completed"] != true { return Ok(None); }
+        let Some(path) = file["local"]["path"].as_str() else { return Ok(None) };
         if path.is_empty() { return Ok(None); }
-        let resolved = std::fs::canonicalize(path).map_err(|_| "Thumbnail file unavailable")?;
-        let root = std::fs::canonicalize(files_root).map_err(|_| "Thumbnail root unavailable")?;
-        if !resolved.starts_with(root) { return Err("Thumbnail path outside current session".into()); }
-        let meta = std::fs::metadata(&resolved).map_err(|_| "Thumbnail metadata unavailable")?;
-        if meta.len() > 256 * 1024 { return Ok(None); }
-        let bytes = std::fs::read(resolved).map_err(|_| "Thumbnail read failed")?;
-        if bytes.len() > 256 * 1024 || bytes.len() < 3 { return Ok(None); }
-        // TDLib small chat/user photos are JPEG thumbnails.
-        if !bytes.starts_with(&[0xff,0xd8,0xff]) { return Ok(None); }
-        Ok(Some(format!("data:image/jpeg;base64,{}", STANDARD.encode(&bytes))))
+        let resolved = std::fs::canonicalize(path).map_err(|_| "Media unavailable")?;
+        let root = std::fs::canonicalize(files_root).map_err(|_| "Media root unavailable")?;
+        if !resolved.starts_with(root) { return Err("Media path outside current Session".into()); }
+        if std::fs::metadata(&resolved).map_err(|_| "Media metadata unavailable")?.len() > limit {
+            return Ok(None);
+        }
+        let bytes = std::fs::read(resolved).map_err(|_| "Media read failed")?;
+        if bytes.is_empty() || bytes.len() as u64 > limit { return Ok(None); }
+        let mime = if bytes.starts_with(&[0xff,0xd8,0xff]) { "image/jpeg" }
+            else if bytes.starts_with(b"\x89PNG\r\n\x1a\n") { "image/png" }
+            else if bytes.starts_with(b"RIFF") && bytes.get(8..12)==Some(b"WEBP") { "image/webp" }
+            else if bytes.starts_with(b"GIF8") { "image/gif" }
+            else if bytes.len()>12 && bytes.get(4..8)==Some(b"ftyp") { "video/mp4" }
+            else { return Ok(None) };
+        Ok(Some(format!("data:{mime};base64,{}", STANDARD.encode(bytes))))
+    }
+    pub fn thumbnail(g: &dyn TelegramGateway, file_id: i64, files_root: &Path) -> Result<Option<String>> {
+        Self::media_data(g, file_id, files_root, false)
     }
     pub fn public(g: &dyn TelegramGateway, username: &str) -> Result<Chat> {
         Self::describe(g.request(
