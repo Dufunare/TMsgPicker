@@ -6,7 +6,8 @@ const props=withDefaults(defineProps<{profileId:string;generation:number;fileId?
 const active=ref(false);
 const root=ref<HTMLElement>();
 const key=computed(()=>avatarKey(props.profileId,props.generation,props.account ? undefined : props.fileId));
-const url=computed(()=>cachedAvatar(key.value)||props.fallbackImage||'');
+const cached=computed(()=>cachedAvatar(key.value));
+const url=computed(()=>cached.value||props.fallbackImage||'');
 let observer:IntersectionObserver|undefined;
 watch(key,()=>{if(active.value)void load();});
 async function load(){if(isTauri()&&(props.account||props.fileId))await requestAvatar(props.profileId,props.generation,props.account?undefined:props.fileId);}
@@ -23,6 +24,6 @@ onUnmounted(()=>observer?.disconnect());
 const initial=computed(()=>Array.from(props.name)[0]?.toUpperCase()??'?');
 </script>
 <template><span ref="root" class="avatar-preview" :class="['avatar-'+size]" :title="name">
-  <img v-if="url" :src="url" :alt="name+'头像'" loading="lazy" decoding="async"/>
+  <img v-if="url" :src="url" :class="{'is-fallback':!cached}" :alt="name+'头像'" loading="lazy" decoding="async"/>
   <span v-else aria-hidden="true">{{initial}}</span>
 </span></template>
