@@ -1259,8 +1259,8 @@ fn combined_content_predicates_apply_to_entire_post() {
     ]};
     assert_eq!(evaluate(post,&filter),Truth::True);
     assert_eq!(evaluate(post,&FilterExpr::ContainsContent{content_kind:"document".into(),exists:false}),Truth::False);
-    let spec=QuerySpec{filter, ..spec(10)};
-    assert!(spec.validate().is_ok());
+    let query_spec=QuerySpec{filter, ..spec(10)};
+    assert!(query_spec.validate().is_ok());
     let invalid=QuerySpec{filter:FilterExpr::ContainsContent{content_kind:"garbage".into(),exists:true}, ..spec(10)};
     assert!(invalid.validate().is_err());
 }
