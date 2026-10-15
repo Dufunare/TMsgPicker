@@ -1185,7 +1185,7 @@ fn recent_single_message_still_stops_at_exact_count() {
 #[test]
 fn normalize_media_exposes_video_preview_and_full_photo_separately() {
     let mut video=message(5);
-    video["content"]=json!({"@type":"messageVideo","video":{"video":{"id":71},"thumbnail":{"file":{"id":72},"format":{"@type":"thumbnailFormatMpeg4"}},"minithumbnail":{"data":"\/9j\/2Q=="}}});
+    video["content"]=json!({"@type":"messageVideo","video":{"video":{"id":71},"thumbnail":{"file":{"id":72},"format":{"@type":"thumbnailFormatMpeg4"}},"minithumbnail":{"data":"/9j/2Q=="}}});
     let m=normalize(&video).unwrap();
     assert_eq!(m.thumbnail_file_id,Some(72));
     assert_eq!(m.full_file_id,Some(71));
