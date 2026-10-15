@@ -8,7 +8,7 @@ test('all application windows use frameless chrome and explicit window capabilit
   const capability=JSON.parse(read('src-tauri/capabilities/default.json'));
   assert.equal(config.app.windows[0].decorations,false);
   for(const label of ['main','settings','login'])assert.ok(capability.windows.includes(label));
-  for(const permission of ['close','minimize','toggle-maximize','is-maximized','on-resized'])
+  for(const permission of ['close','minimize','toggle-maximize','start-dragging','is-maximized'])
     assert.ok(capability.permissions.includes('core:window:allow-'+permission));
   assert.match(read('src-tauri/src/app.rs'),/\.decorations\(false\)/);
 });
