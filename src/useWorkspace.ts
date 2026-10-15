@@ -30,6 +30,7 @@ const {apiId,apiHash,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,ap
 
 const chatList = field('chatList');
 const search = field('search');
+const chatScope = field('chatScope');
 const selectedChat = field('selectedChat');
 const scopeKind = field('scopeKind');
 const rawCount = field('rawCount');
@@ -99,7 +100,7 @@ function scheduleChats(attempt=0){
   chatTimer=setTimeout(async()=>{
     if(token!==sessionToken||!ready.value)return;
     const id=profileId.value,v=view.value,generation=connection.value.generation;
-    try{const list=await invokeCommand<Chat[]>('chats',{profileId:id,search:v.search});if(statuses[id]?.generation===generation){v.chatList=list;v.chatError='';}}
+    try{const list=await invokeCommand<Chat[]>('chats',{profileId:id,search:v.search,scope:v.chatScope});if(statuses[id]?.generation===generation){v.chatList=list;v.chatError='';}}
     catch(e){if(String(e).includes('Session operation in progress')&&attempt<5&&profileId.value===id)scheduleChats(attempt+1);else v.chatError=String(e);}
   },150);
 }
@@ -169,7 +170,7 @@ onMounted(async () => {
 });
 onUnmounted(()=>{unlisteners.forEach(fn=>fn());clearTimeout(chatTimer);answerDialog(null);});
 
-return { dialog,answerDialog,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,preset,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetReport,resetBusy,resetLayout,resizeLayout };
+return { dialog,answerDialog,chatScope,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,preset,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetReport,resetBusy,resetLayout,resizeLayout };
 }
 export type Workspace = ReturnType<typeof useWorkspace>;
 export const workspaceKey=Symbol("workspace");
