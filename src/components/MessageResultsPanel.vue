@@ -1,16 +1,28 @@
 <script setup lang="ts">
+import {ref} from 'vue';
 import { useWorkspaceContext } from '../useWorkspace';
-const {ready,busy,error,chatList,selectedChat,result,scanning,selected,target,confirmation,forwarding,report,preview,uncertainSends,targetTitle,selectedMessageCount,savedMessages,openPost,prepareForward,forward,count,reactionLabel,date}=useWorkspaceContext();
+const {busy,error,chatList,selectedChat,result,scanning,openPost,count,reactionLabel,date}=useWorkspaceContext();
+const expanded=ref<Record<string,boolean>>({});
+function toggle(key:string){expanded.value[key]=!expanded.value[key];}
 </script>
 <template>
 <section class="results"><div class="panel result-header"><p v-if="error" role="alert" class="error">{{error}}</p><h2>{{selectedChat?.title ?? 'Messages & Results'}} <span v-if="result" class="badge" :class="result.status">{{ result.status }}</span></h2><p v-if="result">已扫描 {{ result.scanned }} 条 · {{ result.pages }} 页 · {{ result.exact ? 'Exact：此 Scope 内精确排名' : 'Partial：临时或不完整排名' }}</p><p v-if="result?.detail && result.status==='Error'" class="muted">{{result.detail}}</p></div>
         <div v-if="result && !result.posts.length" class="panel empty">{{ scanning ? '正在读取历史…' : '当前扫描范围没有匹配帖子。' }}</div>
-        <article v-for="post in result?.posts ?? []" :key="post.key" class="panel post"><div class="post-top"><label class="check"><input v-model="selected" type="checkbox" :value="post.key" :disabled="scanning || forwarding || confirmation"><strong>{{ chatList.find(c=>c.id===post.representative.chat_id)?.title ?? post.representative.chat_id }}</strong></label><button :disabled="busy" @click="openPost(post)">打开原文 ↗</button></div><p class="muted">{{ date(post.date) }} · {{ post.kind==='album' ? `Album · ${post.members.length} 个已扫描成员` : 'Single' }} <span v-if="post.partial">· Partial</span></p><p class="post-text">{{ post.text || '（无文本 / caption）' }}</p><div class="media"><span v-for="member in post.members" :key="member.key.message_id" class="media-kind">{{ member.content_kind }} · {{ member.key.message_id }}</span></div><div class="metrics"><span>浏览 <b>{{ count(post.metrics.views) }}</b></span><span>转发 <b>{{ count(post.metrics.forwards) }}</b></span><span>评论 <b>{{ count(post.metrics.reply_info) }}</b></span></div><div class="reactions"><span v-if="post.metrics.reactions===null">反应 —</span><span v-else-if="!post.metrics.reactions.length">反应 0</span><span v-for="(r,i) in post.metrics.reactions ?? []" :key="i">{{ reactionLabel(r.key) }} {{ count(r.count) }}</span></div><details><summary>指标来源</summary><p v-for="(source,field) in post.provenance" :key="field">{{ field }} ← 消息 {{ source }}</p></details></article>
-        <section v-if="result?.posts.length" class="panel actions"><h3>手动转发</h3><p>已选 {{ selected.length }} 个帖子 · {{ selectedMessageCount }} 条成员消息</p><label>目标聊天<select v-model="target" @change="confirmation=false" :disabled="forwarding"><option value="">选择目标（提交时检查权限）</option><option v-for="chat in chatList" :key="chat.id" :value="chat.id">{{ chat.title }}</option></select></label><button :disabled="busy || forwarding || !ready" @click="savedMessages">使用 Saved Messages</button><button :disabled="!selected.length || !target || scanning || forwarding || busy" @click="prepareForward">准备转发</button>
-          <div v-if="confirmation" class="confirm" role="dialog" aria-label="确认转发"><p>确认将 {{ selectedMessageCount }} 条成员消息转发到「{{ targetTitle }}」？受保护或权限不足的消息会被拒绝，逐条报告结果。</p><p v-for="item in preview?.items ?? []" :key="`${item.source.chat_id}:${item.source.message_id}`">{{ item.source.message_id }} — {{ item.state }} · {{ item.detail }}</p><button class="primary" :disabled="forwarding || !preview?.items.some(i=>i.state==='Allowed')" @click="forward">{{ forwarding ? '正在转发…' : '确认转发' }}</button><button :disabled="forwarding" @click="confirmation=false">返回</button></div>
-          <div v-if="report"><h3>转发结果</h3><p v-for="item in report.items" :key="`${item.source.chat_id}:${item.source.message_id}`">{{ item.source.chat_id }} / {{ item.source.message_id }} — {{ item.state }} · {{ item.detail }}</p></div>
-        </section>
-        <section v-if="uncertainSends.length" class="panel actions"><h3>送达状态未知 · Unknown</h3><p>送达未确认，请在 Telegram 核对后再操作。</p><p v-for="send in uncertainSends" :key="`${send.generation}:${send.target}:${send.old_message_id}`">目标 {{send.target}} / 临时消息 {{send.old_message_id}} — Unknown</p></section>
+        <article v-for="post in result?.posts ?? []" :key="post.key" class="panel post">
+  <div class="post-top"><strong>{{chatList.find(c=>c.id===post.representative.chat_id)?.title??selectedChat?.title??'Telegram'}}</strong><button :disabled="busy" @click="openPost(post)">查看原文 ↗</button></div>
+  <p class="muted">{{date(post.date)}} · {{post.kind==='album'?'媒体组':'消息'}}<span v-if="post.partial"> · 部分内容</span></p>
+  <p class="post-text" :class="{'post-clamped':!expanded[post.key]}">{{post.text||'（媒体消息）'}}</p>
+  <div class="metrics"><span>浏览 <b>{{count(post.metrics.views)}}</b></span><span>转发 <b>{{count(post.metrics.forwards)}}</b></span><span>评论 <b>{{count(post.metrics.reply_info)}}</b></span></div>
+  <div class="reactions"><span v-if="post.metrics.reactions===null">反应 —</span><span v-else-if="!post.metrics.reactions.length">反应 0</span><span v-for="(reaction,i) in post.metrics.reactions??[]" :key="i">{{reactionLabel(reaction.key)}} {{count(reaction.count)}}</span></div>
+  <div class="post-actions"><button type="button" :aria-expanded="!!expanded[post.key]" @click="toggle(post.key)">{{expanded[post.key]?'收起详情':'展开详情'}}</button></div>
+  <section v-if="expanded[post.key]" class="post-details">
+    <div>内容类型：{{post.kind==='album'?'媒体组':'单条消息'}}</div><div>成员：{{post.members.length}}</div>
+    <div class="media"><span v-for="member in post.members" :key="member.key.message_id" class="media-kind">{{member.content_kind}}</span></div>
+    <details><summary>指标来源</summary><p v-for="(source,field) in post.provenance" :key="field">{{field}} ← 消息 {{source}}</p></details>
+  </section>
+</article>
+        
+        
       </section>
     
 </template>
