@@ -1,12 +1,13 @@
 <script setup lang="ts">
 import {useLogin} from '../useLogin';
+import AppSelect from './AppSelect.vue';
 const {snapshot,connection,phone,passphrase,remember,recoveryId,value,twoFactorPassword,busy,error,label,pending,sendingPhone,combinedAuth,begin,submit,cancel,openSettings,retryIdentity}=useLogin();
 </script>
 <template>
 <main class="settings-page"><div class="settings-content"><h2>添加 Telegram 账号</h2>
 <p v-if="error" class="error" role="alert">{{error}}</p>
 <form v-if="!pending" @submit.prevent="begin">
-  <label v-if="snapshot?.interrupted_profiles.length">本地会话<select v-model="recoveryId"><option value="">创建新的独立 Session</option><option v-for="p in snapshot.interrupted_profiles" :key="p.profile_id" :value="p.profile_id">恢复未完成登录 · {{p.is_legacy_profile?'Legacy':p.profile_id}}</option></select></label>
+  <label v-if="snapshot?.interrupted_profiles.length">本地会话<AppSelect v-model="recoveryId" label="本地会话" :options="[{value:'',label:'创建新的独立 Session'},...snapshot.interrupted_profiles.map(p=>({value:p.profile_id,label:'恢复未完成登录 · '+(p.is_legacy_profile?'Legacy':p.profile_id)}))]"/></label>
   <label>手机号（含国际区号）<input v-model="phone" type="tel" placeholder="+86…" autocomplete="off" :required="!recoveryId"></label>
   <label>{{recoveryId?'原有本地数据库密码':'设置本地数据库密码'}}<input v-model="passphrase" type="password" autocomplete="off" required></label>
   <label class="check"><input v-model="remember" type="checkbox">记住此设备（Windows DPAPI 保护）</label><small>未记住时，下次启动需输入原数据库密码以恢复 Session。</small>
