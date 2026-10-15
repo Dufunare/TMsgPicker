@@ -126,7 +126,7 @@ select {
 .account-switch .app-select {width:29px;}
 .account-switch .app-select-trigger {width:29px;min-height:29px;height:29px;padding:0;background:transparent;border:0;font-size:0;}
 .account-switch .app-select-trigger .app-select-chevron {font-size:17px;margin:auto;}
-.account-switch .app-select-menu {left:auto;right:0;width:230px;max-height:300px;text-align:left;font-size:12px;}
+.account-switch .app-select-menu {left:auto;right:-28px;width:210px;max-height:300px;text-align:left;font-size:12px;}
 .filter-node .app-select {flex:1 1 88px;min-width:88px;}
 .filter-node .app-select-trigger {width:100%;font-size:11px;}
 
