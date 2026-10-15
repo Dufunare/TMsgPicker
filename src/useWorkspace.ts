@@ -1,6 +1,6 @@
 
 import { computed, onMounted, onUnmounted, ref } from 'vue';
-import {clearAvatars} from './media/avatarCache';
+import {clearAvatars} from './media/avatarCache.ts';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen, emit, type UnlistenFn } from '@tauri-apps/api/event';
 import { openUrl } from '@tauri-apps/plugin-opener';
