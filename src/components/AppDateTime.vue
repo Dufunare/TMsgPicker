@@ -21,7 +21,7 @@ function set(index:number,value:number){if(index===0)year.value=value;else if(in
 function scrollToSelection(){columns.value.forEach((el,i)=>{el?.scrollTo({top:Math.max(0,configs.value[i]!.items.indexOf(values.value[i]!))*36,behavior:'instant'});});}
 function toggle(){if(props.disabled)return;if(props.modelValue){const d=new Date(props.modelValue);if(!Number.isNaN(d.valueOf())){year.value=d.getFullYear();month.value=d.getMonth()+1;day.value=d.getDate();hour.value=d.getHours();minute.value=d.getMinutes();}}
  open.value=!open.value;if(open.value)void nextTick(scrollToSelection);}
-function save(){emit('update:modelValue',`${year.value}-${pad(month.value)}-${pad(day)}T${pad(hour)}:${pad(minute)}`);open.value=false;}
+function save(){emit('update:modelValue',`${year.value}-${pad(month.value)}-${pad(day.value)}T${pad(hour.value)}:${pad(minute.value)}`);open.value=false;}
 function wheel(index:number,event:WheelEvent){event.preventDefault();const items=configs.value[index]!.items;const current=values.value[index]!;const next=items[Math.max(0,Math.min(items.length-1,items.indexOf(current)+(event.deltaY>0?1:-1)))];if(next!==undefined)set(index,next);void nextTick(scrollToSelection);}
 function outside(e:PointerEvent){if(host.value&&!host.value.contains(e.target as Node))open.value=false;}
 function escape(e:KeyboardEvent){if(e.key==='Escape')open.value=false;}
