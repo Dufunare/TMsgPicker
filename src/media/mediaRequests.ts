@@ -11,7 +11,7 @@ export function requestMedia(profileId:string,generation:number,fileId:number,fu
  const run=async():Promise<string|null>=>{
   for(let attempt=0;attempt<3;attempt++){
    try{return await invoke<string|null>('photo_thumbnail',{profileId,fileId,full});}
-   catch(error){if(!String(error).includes('Session operation in progress')||attempt===2)throw error;}
+   catch(error){if(!String(error).includes('Session operation in progress')||attempt===2)throw error;await new Promise(resolve=>setTimeout(resolve,100*(attempt+1)));}
   }
   return null;
  };
