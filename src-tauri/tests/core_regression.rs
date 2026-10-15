@@ -9,7 +9,7 @@ use std::{
 use tmsgpicker_lib::{
     core::*,
     gateway::{Result, SessionLifecycle, TelegramGateway},
-    services::{ActionService, AuthService, ConnectConfig, ProxyConfig},
+    services::{ActionService, AuthService, ChatListScope, ChatService, ConnectConfig, ProxyConfig},
 };
 
 struct MockTelegramGateway {
@@ -1105,4 +1105,48 @@ fn permanently_stagnant_cursor_is_bounded() {
     assert_eq!(r.status, ScanStatus::Partial);
     assert_eq!(r.scanned, 1);
     assert_eq!(r.pages, 4);
+}
+
+#[test]
+fn chat_list_includes_archive_and_supports_scoped_search() {
+    struct ChatsMock {
+        requests: Mutex<Vec<Value>>,
+    }
+    impl TelegramGateway for ChatsMock {
+        fn request(&self, request: Value, _: &AtomicBool) -> Result<Value> {
+            self.requests.lock().unwrap().push(request.clone());
+            let kind = request["@type"].as_str().unwrap_or_default();
+            let archive = request["chat_list"]["@type"] == "chatListArchive";
+            match kind {
+                "loadChats" => Ok(json!({"@type":"ok"})),
+                "getChats" => {
+                    if archive { Ok(json!({"chat_ids":[2,3]})) }
+                    else { Ok(json!({"chat_ids":[1,2]})) }
+                }
+                "searchChats" => Ok(json!({"chat_ids":[1]})),
+                "getChat" => {
+                    let id=request["chat_id"].as_i64().unwrap();
+                    let title = match id { 1 => "Main One", 2 => "Archive Two", _ => "Archive Three" };
+                    let list = if id == 1 { "chatListMain" } else { "chatListArchive" };
+                    Ok(json!({"id":id,"title":title,"type":{"@type":"chatTypeSupergroup"},
+                        "positions":[{"list":{"@type":list},"order":"100"}]}))
+                }
+                _ => panic!("unexpected TDLib request: {kind}"),
+            }
+        }
+        fn request_batch(&self, _: Vec<Value>, _: &AtomicBool) -> Result<Vec<Value>> { unreachable!() }
+    }
+    let g = ChatsMock { requests: Mutex::new(vec![]) };
+    let all = ChatService::list(&g, "", ChatListScope::All).unwrap();
+    assert_eq!(all.len(),3);
+    assert_eq!(all.iter().filter(|c| c.archived).count(),2);
+    assert_eq!(all.iter().filter(|c| c.id=="2").count(),1);
+    let archived = ChatService::list(&g,"Three",ChatListScope::Archive).unwrap();
+    assert_eq!(archived.len(),1);
+    assert_eq!(archived[0].title,"Archive Three");
+    let main = ChatService::list(&g,"",ChatListScope::Main).unwrap();
+    assert_eq!(main.len(),1);
+    assert_eq!(main[0].title,"Main One");
+    assert!(g.requests.lock().unwrap().iter().any(|v| v["@type"]=="loadChats"
+        && v["chat_list"]["@type"]=="chatListArchive"));
 }
