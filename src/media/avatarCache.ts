@@ -1,4 +1,4 @@
-import {requestMedia} from './mediaRequests';
+import {requestMedia} from './mediaRequests.ts';
 import {reactive} from 'vue';
 
 const MAX_ITEMS=96, TTL=15*60*1000, MAX_ACTIVE=1;
