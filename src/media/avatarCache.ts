@@ -57,8 +57,9 @@ export async function requestAvatar(profile:string,generation:number,id?:number)
       return url;
     }catch {return '';}
     finally{release();}
-  })().finally(()=>inflight.delete(key));
+  })();
   inflight.set(key,task);
+  void task.finally(()=>{if(inflight.get(key)===task)inflight.delete(key);});
   return task;
 }
 export function clearAvatars(profile?:string){
