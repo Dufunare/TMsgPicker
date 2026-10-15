@@ -6,7 +6,7 @@
 .window-titlebar {
   height:38px; min-height:38px; display:flex; align-items:center; justify-content:space-between;
   gap:12px; padding-left:14px; user-select:none; flex-shrink:0; color:var(--text-strong);
-  background:transparent; border-bottom:1px solid var(--border-subtle);
+  background:transparent;
   font: 500 12px/1 var(--font-family, "Segoe UI", sans-serif);
 }
 .window-titlebar-identity { display:flex; align-items:center; gap:9px; flex:1; height:100%; min-width:0; }
@@ -29,6 +29,5 @@
 .chrome-restore::before { top:0; right:0; } .chrome-restore::after { bottom:0; left:0; background:var(--canvas); }
 .chrome-close::before,.chrome-close::after { content:""; position:absolute; left:5px; top:-1px; width:1px; height:14px; background:currentColor; transform:rotate(45deg); }
 .chrome-close::after { transform:rotate(-45deg); }
-:root[data-theme="glass"] .window-titlebar { border-bottom-color:rgba(164,188,216,.30); }
 :root[data-motion="off"] .window-titlebar-actions button { transition:none; }
 @media(prefers-reduced-motion:reduce){.window-titlebar-actions button{transition:none;}}
