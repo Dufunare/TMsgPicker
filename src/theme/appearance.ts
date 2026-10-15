@@ -15,12 +15,13 @@ export type Appearance = {
   glass_blur?: number;
   spacing?: number;
   image_preview_size?: number;
+  animations?: boolean;
 };
 
 export const defaultAppearance: Appearance = {
   theme: 'system', accent: '#4277cf', density: 'comfortable',
   radius: 12, font_scale: 100, elevation: 'soft', scrollbar: 'slim',
-  glass_opacity: 48, glass_blur: 30, spacing: 100, image_preview_size:250,
+  glass_opacity: 48, glass_blur: 30, spacing: 100, image_preview_size:250, animations:true,
 };
 
 const current = reactive<Appearance>({ ...defaultAppearance });
@@ -63,6 +64,7 @@ export function validAppearance(input: unknown): input is Appearance {
     && (a.glass_opacity === undefined || (Number.isInteger(a.glass_opacity) && (a.glass_opacity as number) >= 20 && (a.glass_opacity as number) <= 90))
     && (a.glass_blur === undefined || (Number.isInteger(a.glass_blur) && (a.glass_blur as number) >= 0 && (a.glass_blur as number) <= 60))
     && (a.image_preview_size === undefined || (Number.isInteger(a.image_preview_size) && (a.image_preview_size as number)>=120 && (a.image_preview_size as number)<=520))
+    && (a.animations === undefined || typeof a.animations === 'boolean')
     && (a.spacing === undefined || (Number.isInteger(a.spacing) && (a.spacing as number) >= 75 && (a.spacing as number) <= 140));
 }
 
@@ -72,6 +74,7 @@ export function applyAppearance(next: Appearance) {
   Object.assign(current, resolved);
   const root = document.documentElement;
   const dark = isDark(next);
+  root.dataset.motion = resolved.animations === false ? 'off' : 'on';
   root.dataset.theme = next.theme === 'glass' ? 'glass' : dark ? 'dark' : 'light';
   root.dataset.density = next.density;
   root.dataset.elevation = next.elevation;
