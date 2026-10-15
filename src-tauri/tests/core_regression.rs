@@ -1150,3 +1150,48 @@ fn chat_list_includes_archive_and_supports_scoped_search() {
     assert!(g.requests.lock().unwrap().iter().any(|v| v["@type"]=="loadChats"
         && v["chat_list"]["@type"]=="chatListArchive"));
 }
+
+#[test]
+fn recent_n_counts_complete_media_group_as_one_logical_post() {
+    let album = |id:i64| {
+        let mut msg=message(id);
+        msg["media_album_id"]=json!(987654321_i64);
+        msg["content"]=json!({"@type":"messagePhoto","caption":{"text":"album"},"photo":{"sizes":[]}});
+        msg
+    };
+    let g=MockTelegramGateway::pages(vec![
+        page(vec![message(112),album(111)]),
+        page(vec![album(111),album(110),album(109)]),
+        page(vec![album(109),message(108)]),
+    ]);
+    let mut spec=spec(2);spec.output_limit=8;
+    let r=scan(&g,&spec,"album-logical".into(),&AtomicBool::new(false),|_|{}).unwrap();
+    assert_eq!(r.scanned,4); // one text + three album members
+    assert_eq!(r.posts.len(),2);
+    assert_eq!(r.posts.iter().find(|p|p.kind==PostKind::Album).unwrap().members.len(),3);
+    assert!(r.posts.iter().all(|p|p.members.iter().all(|m|m.key.message_id!="108")));
+    assert_eq!(r.pages,3);
+    assert_eq!(g.requests.lock().unwrap()[0]["limit"],2);
+}
+#[test]
+fn recent_single_message_still_stops_at_exact_count() {
+    let g=MockTelegramGateway::pages(vec![page((90..=100).rev().map(message).collect())]);
+    let mut spec=spec(3);spec.output_limit=5;
+    let r=scan(&g,&spec,"singles".into(),&AtomicBool::new(false),|_|{}).unwrap();
+    assert_eq!(r.scanned,3);
+    assert_eq!(r.posts.len(),3);
+    assert_eq!(r.pages,1);
+}
+#[test]
+fn normalize_media_exposes_video_preview_and_full_photo_separately() {
+    let mut video=message(5);
+    video["content"]=json!({"@type":"messageVideo","video":{"video":{"id":71},"thumbnail":{"file":{"id":72},"format":{"@type":"thumbnailFormatMpeg4"}},"minithumbnail":{"data":"\/9j\/2Q=="}}});
+    let m=normalize(&video).unwrap();
+    assert_eq!(m.thumbnail_file_id,Some(72));
+    assert_eq!(m.full_file_id,Some(71));
+    let mut photo=message(6);
+    photo["content"]=json!({"@type":"messagePhoto","photo":{"sizes":[{"width":64,"height":64,"photo":{"id":17}},{"width":1280,"height":720,"photo":{"id":20}},{"width":320,"height":320,"photo":{"id":18}}]}}});
+    let p=normalize(&photo).unwrap();
+    assert_eq!(p.thumbnail_file_id,Some(18));
+    assert_eq!(p.full_file_id,Some(20));
+}
