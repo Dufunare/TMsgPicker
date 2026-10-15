@@ -55,7 +55,6 @@ struct AppState {
     settings_window: Mutex<()>,
     settings_target: Mutex<SettingsTarget>,
     appearance_session: Mutex<AppearanceSession>,
-    media_gallery: Mutex<Option<GalleryState>>,
     pending_login: Mutex<Option<PendingLogin>>,
     store: Mutex<Option<Store>>,
     manager: TdlibRuntimeManager,
@@ -64,9 +63,6 @@ struct AppState {
     close_approvals: Mutex<HashMap<String, CloseApproval>>,
     approval_sequence: AtomicU64,
 }
-const MEDIA_WINDOW: &str = "media-viewer";
-#[derive(Clone, Serialize)]
-struct GalleryState { profile_id: String, generation: u64, image_file_ids: Vec<i32>, index: usize }
 struct PendingLogin {
     profile_id: String,
     phone: Option<String>,
@@ -1271,53 +1267,11 @@ async fn chats(app: tauri::AppHandle, profile_id: String, search: String, scope:
         let s = account(&global, &profile_id)?;
         let _lock = s
             .lifecycle
-            .try_lock()
-            .map_err(|_| "Session operation in progress")?;
+            .lock()
+            .map_err(|_| "Account lock poisoned")?;
         ChatService::list(gateway(&s)?.as_ref(), &search, scope.unwrap_or_default())
     })
     .await
-}
-#[tauri::command]
-async fn open_image_gallery(app: tauri::AppHandle, window: tauri::WebviewWindow,
-    profile_id: String, generation: u64, image_file_ids: Vec<i32>, index: usize) -> Result<()> {
-    if window.label() != "main" || image_file_ids.is_empty() || image_file_ids.len() > 30
-        || index >= image_file_ids.len() || image_file_ids.iter().any(|id| *id <= 0) {
-        return Err("Invalid image gallery request".into());
-    }
-    background(move || {
-        let state=app.state::<AppState>();
-        let _gate=state.lifecycle.try_read().map_err(|_|"Application transition in progress")?;
-        ensure_running(&state)?;
-        let runtime=account(&state,&profile_id)?;
-        if runtime.epoch.load(Ordering::SeqCst)!=generation { return Err("Expired gallery Session".into()); }
-        let gallery=GalleryState{profile_id,generation,image_file_ids,index};
-        *state.media_gallery.lock().unwrap()=Some(gallery.clone());
-        if let Some(viewer)=app.get_webview_window(MEDIA_WINDOW) {
-            let _=viewer.emit("gallery-updated",gallery);
-            viewer.unminimize().and_then(|_|viewer.show()).and_then(|_|viewer.set_focus())
-                .map_err(|_|"Cannot focus gallery")?;
-        } else {
-            tauri::WebviewWindowBuilder::new(&app,MEDIA_WINDOW,tauri::WebviewUrl::App("index.html?view=media".into()))
-                .title("图片浏览").inner_size(1080.0,760.0).min_inner_size(480.0,320.0)
-                .decorations(false).transparent(true).shadow(false).skip_taskbar(true).always_on_top(true).center()
-                .build().map_err(|_|"Cannot open media window")?;
-        }
-        Ok(())
-    }).await
-}
-#[tauri::command]
-fn image_gallery_state(window:tauri::WebviewWindow,state:State<AppState>) -> Result<GalleryState>{
-    if window.label()!=MEDIA_WINDOW{return Err("Not a media window".into());}
-    let gallery=state.media_gallery.lock().unwrap().clone().ok_or("Gallery is closed")?;
-    if account(&state,&gallery.profile_id)?.epoch.load(Ordering::SeqCst)!=gallery.generation {
-        return Err("Gallery Session expired".into());
-    }
-    Ok(gallery)
-}
-#[tauri::command]
-fn close_image_gallery(window:tauri::WebviewWindow)->Result<()>{
-    if window.label()!=MEDIA_WINDOW{return Err("Not a media window".into());}
-    window.close().map_err(|_|"Cannot close gallery".into())
 }
 #[tauri::command]
 async fn photo_thumbnail(
@@ -1327,12 +1281,12 @@ async fn photo_thumbnail(
     full: Option<bool>,
     window: tauri::WebviewWindow,
 ) -> Result<Option<String>> {
-    if full.unwrap_or(false) && window.label()!=MEDIA_WINDOW && window.label()!="main" {return Err("Full media restricted to image viewer".into());}
+    if full.unwrap_or(false) && window.label()!="main" {return Err("Full media restricted to workspace".into());}
     background(move || {
         let global = app.state::<AppState>();
         let _gate = global.lifecycle.try_read().map_err(|_| "Application transition in progress")?;
         let runtime = account(&global, &profile_id)?;
-        let _lock = runtime.lifecycle.try_lock().map_err(|_| "Session operation in progress")?;
+        let _lock = runtime.lifecycle.lock().map_err(|_| "Account lock poisoned")?;
         // TDLib file IDs are process-scoped. Never accept a path or arbitrary URL from WebView.
         let g = gateway(&runtime)?;
         let mut fallback: Option<String> = None;
@@ -1343,7 +1297,8 @@ async fn photo_thumbnail(
                 fallback = me["profile_photo"]["minithumbnail"]["data"].as_str()
                     .filter(|data|data.len()<16_384 && data.chars().all(|c|c.is_ascii_alphanumeric()||matches!(c,'+'|'/'|'=')))
                     .map(|data|format!("data:image/jpeg;base64,{data}"));
-                let Some(id) = me["profile_photo"]["big"]["id"].as_i64().or_else(||me["profile_photo"]["small"]["id"].as_i64()).and_then(|id| i32::try_from(id).ok()) else {return Ok(fallback)};
+                let Some(id) = me["profile_photo"]["small"]["id"].as_i64().or_else(||me["profile_photo"]["big"]["id"].as_i64()).and_then(|id| i32::try_from(id).ok()) else {return Ok(fallback)};
+
                 id
             }
         };
@@ -2276,9 +2231,6 @@ pub fn run() {
             Ok(())
         })
         .on_window_event(|window, event| {
-            if window.label()==MEDIA_WINDOW && matches!(event,tauri::WindowEvent::Destroyed){
-                window.app_handle().state::<AppState>().media_gallery.lock().unwrap().take();
-            }
             if window.label() == "settings" && matches!(event, tauri::WindowEvent::Destroyed) {
                 let app = window.app_handle();
                 let state = app.state::<AppState>();
@@ -2358,9 +2310,6 @@ pub fn run() {
             chats,
             public_chat,
             photo_thumbnail,
-            open_image_gallery,
-            image_gallery_state,
-            close_image_gallery,
             saved_messages,
             start_query,
             cancel_query,
