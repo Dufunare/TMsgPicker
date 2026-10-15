@@ -36,6 +36,17 @@ html.settings-view, html.settings-view body, html.settings-view #app { min-width
 .settings-field-group { margin-top:16px; padding-top:16px; border-top:1px solid var(--border-subtle); }
 .settings-proxy-address { display:grid; grid-template-columns:minmax(0,1fr) 90px; gap:12px; margin:12px 0; }
 .settings-identity { color:var(--text-strong); font-size:calc(12px * var(--font-scale)); font-weight:500; margin:0 0 6px; }
+
+/* Keep the account identity badge vertically centered beside the information block. */
+.account-info-layout { display:flex; align-items:center; justify-content:space-between; gap:16px; }
+.account-info-details { flex:1; min-width:0; }
+.settings-account-badge {
+  display:flex; align-items:center; gap:12px; flex:0 1 auto; min-width:0; max-width:48%;
+  padding:7px 10px; border-radius:calc(var(--radius)*.75);
+  background:var(--surface-muted); color:var(--text-strong); font-weight:600;
+}
+.settings-account-name { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.settings-account-badge .avatar-preview { width:52px; height:52px; font-size:19px; }
 .settings-page .error { margin:12px 0; }
 .setting-label { display:flex; align-items:baseline; justify-content:space-between; gap:8px; }
 .setting-value { color:var(--text-muted); font-weight:400; }

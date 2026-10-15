@@ -192,8 +192,6 @@ html.media-view .native-image-viewer {margin:0;max-width:none;}
 .member-metric-overlay.is-visible {opacity:1;transform:translateY(0);}
 .member-metric-overlay span {display:inline-flex;align-items:center;gap:3px;}
 .member-metric-overlay .ui-icon {width:12px;height:12px;}
-.settings-account-badge {float:right;display:flex;align-items:center;gap:10px;max-width:75%;padding:4px 7px;border-radius:calc(var(--radius)*.75);background:var(--surface-muted);color:var(--text-strong);font-weight:600;}
-.settings-account-badge span {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .account-tools {display:grid;grid-template-columns:repeat(3,29px);align-items:center;justify-items:center;gap:0;}
 .account-tools>.icon-button,.account-tools>.account-switch,.account-tools>.account-menu {width:29px;height:29px;display:grid;place-items:center;margin:0;padding:0;}
 .account-tools .account-switch:hover,.account-tools .account-switch:focus-within {background:transparent;outline:none;}
