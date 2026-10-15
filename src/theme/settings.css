@@ -1,6 +1,6 @@
 /* Shared settings presentation; data and actions stay in the page components. */
 html.settings-view, html.settings-view body, html.settings-view #app { min-width:0; }
-.settings-page { height:100dvh; display:flex; flex-direction:column; background:var(--canvas); padding:12px; }
+.settings-page { height:100%; display:flex; flex-direction:column; background:var(--canvas); padding:12px; }
 .settings-tabs { display:flex; flex-shrink:0; gap:5px; padding:0 5px 10px; }
 .settings-tabs button { flex:1; min-height:var(--control-height); background:var(--surface-subtle); border-color:var(--border-subtle); }
 .settings-tabs button[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); border-color:var(--ring); }

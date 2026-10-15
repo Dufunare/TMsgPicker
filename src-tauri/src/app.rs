@@ -578,6 +578,7 @@ fn open_auxiliary(app: &tauri::AppHandle, label: &str, url: &str, title: &str) -
                 .inner_size(500.0, 580.0)
                 .min_inner_size(420.0, 440.0)
                 .maximizable(false)
+                .decorations(false)
                 .center()
                 .build()
                 .map_err(|_| "Cannot open window")?;

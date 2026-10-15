@@ -2,7 +2,7 @@
 html,body,#app { height:100%; min-width:640px; overflow:hidden; }
 main { max-width:none; }
 .workspace {
-  height:100dvh; display:grid; gap:0; padding:calc(10px * var(--spacing-scale,1)); align-items:stretch;
+  height:100%; display:grid; gap:0; padding:calc(10px * var(--spacing-scale,1)); align-items:stretch;
   position:relative; overflow-x:auto; background:var(--canvas);
 }
 .left-column,.middle-column,.right-column {
