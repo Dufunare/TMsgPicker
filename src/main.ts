@@ -9,6 +9,7 @@ import './theme/components.css';
 import './theme/appearance-settings.css';
 import './workspace.css';
 import './theme/settings.css';
+import './theme/selection-motion.css';
 import './theme/glass.css';
 import './theme/window-chrome.css';
 

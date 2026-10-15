@@ -131,7 +131,10 @@ button.icon-button:hover:enabled,.icon-button:hover { background:var(--hover); c
 .builder form > h3 { margin:calc(12px * var(--spacing-scale,1)) 0 4px; }
 .builder form > label { margin:calc(4px * var(--spacing-scale,1)) 0; }
 .builder .buttons { margin-top:16px; }
-.chat-scope { display:flex; align-items:center; gap:4px; padding:8px 10px; min-height:44px; border-bottom:1px solid var(--border-subtle); }
+.chat-scope {
+  display:flex; align-items:center; gap:4px; padding:8px 10px; min-height:44px; border-bottom:1px solid var(--border-subtle);
+  --segment-left:10px; --segment-top:8px; --segment-bottom:8px; --segment-width-deduction:28px; --segment-gap:4px;
+}
 .chat-scope button { flex:1; min-height:27px; padding:3px 7px; background:transparent; border-color:transparent; font-size:11px; }
 .chat-scope button[aria-pressed="true"] { color:var(--accent); background:var(--accent-soft); border-color:var(--border-subtle); }
 .chat-archive-tag { margin-left:auto; font-size:10px; color:var(--text-muted); background:var(--surface-muted); border-radius:5px; padding:1px 5px; }
@@ -139,15 +142,6 @@ button.icon-button:hover:enabled,.icon-button:hover { background:var(--hover); c
 /* Shared motion treatment, controlled by the single appearance preference. */
 :root[data-motion="on"] .chat {transition:background-color .2s ease,border-color .2s ease,transform .2s ease;}
 :root[data-motion="on"] .chat:hover {transform:translateX(2px);}
-:root[data-motion="on"] .chat-scope button {transition:color .2s ease,background-color .22s ease,border-color .2s ease;}
-:root[data-motion="on"] .chat-scope {position:relative;isolation:isolate;}
-:root[data-motion="on"] .chat-scope button {position:relative;z-index:1;background:transparent;border-color:transparent;}
-:root[data-motion="on"] .chat-scope::before {content:"";position:absolute;top:8px;bottom:8px;left:10px;width:calc((100% - 20px - 8px)/3);background:var(--accent-soft);border:1px solid var(--border-subtle);border-radius:calc(var(--radius)*.55);transform:translateX(calc(var(--scope-index,0)*(100% + 4px)));transition:transform .28s cubic-bezier(.2,.7,.15,1);pointer-events:none;}
 :root[data-motion="off"] *,:root[data-motion="off"] *::before,:root[data-motion="off"] *::after {animation:none!important;transition:none!important;scroll-behavior:auto!important;}
 @media(prefers-reduced-motion:reduce){:root[data-motion="on"] *,:root[data-motion="on"] *::before,:root[data-motion="on"] *::after {animation:none!important;transition:none!important;scroll-behavior:auto!important;}}
 
-.chat-fade-enter-active,.chat-fade-leave-active {transition:opacity .18s ease, transform .18s ease;}
-.chat-fade-enter-from {opacity:0;transform:translateY(6px);}
-.chat-fade-leave-to {opacity:0;transform:translateY(-4px);}
-:root[data-motion="off"] .chat-fade-enter-active,:root[data-motion="off"] .chat-fade-leave-active {transition:none;}
-@media(prefers-reduced-motion:reduce){.chat-fade-enter-active,.chat-fade-leave-active{transition:none!important;}}

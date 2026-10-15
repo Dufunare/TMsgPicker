@@ -1,9 +1,16 @@
 /* Shared settings presentation; data and actions stay in the page components. */
 html.settings-view, html.settings-view body, html.settings-view #app { min-width:0; }
 .settings-page { height:100%; display:flex; flex-direction:column; background:var(--canvas); padding:12px; }
-.settings-tabs { display:flex; flex-shrink:0; gap:5px; padding:0 5px 10px; }
+.settings-tabs {
+  display:flex; flex-shrink:0; gap:5px; padding:0 5px 10px;
+  --segment-left:5px; --segment-top:0px; --segment-bottom:10px; --segment-width-deduction:20px; --segment-gap:5px;
+}
 .settings-tabs button { flex:1; min-height:var(--control-height); background:var(--surface-subtle); border-color:var(--border-subtle); }
 .settings-tabs button[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); border-color:var(--ring); }
+/* The panels overlap only during their short fade; v-show keeps all form state alive. */
+.settings-panels { position:relative; flex:1; min-height:0; }
+.settings-panels > .settings-content { position:absolute; inset:0; width:100%; height:100%; }
+
 .settings-content {
   flex:1; min-height:0; overflow:auto; padding:18px;
   border:1px solid var(--border); border-radius:var(--radius);
