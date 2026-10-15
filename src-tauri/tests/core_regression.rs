@@ -1190,7 +1190,7 @@ fn normalize_media_exposes_video_preview_and_full_photo_separately() {
     assert_eq!(m.thumbnail_file_id,Some(72));
     assert_eq!(m.full_file_id,Some(71));
     let mut photo=message(6);
-    photo["content"]=json!({"@type":"messagePhoto","photo":{"sizes":[{"width":64,"height":64,"photo":{"id":17}},{"width":1280,"height":720,"photo":{"id":20}},{"width":320,"height":320,"photo":{"id":18}}]}}});
+    photo["content"]=json!({"@type":"messagePhoto","photo":{"sizes":[{"width":64,"height":64,"photo":{"id":17}},{"width":1280,"height":720,"photo":{"id":20}},{"width":320,"height":320,"photo":{"id":18}}]}});
     let p=normalize(&photo).unwrap();
     assert_eq!(p.thumbnail_file_id,Some(18));
     assert_eq!(p.full_file_id,Some(20));
