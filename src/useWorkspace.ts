@@ -1,5 +1,6 @@
 
 import { computed, onMounted, onUnmounted, ref } from 'vue';
+import {clearAvatars} from './media/avatarCache';
 import { invoke, isTauri } from '@tauri-apps/api/core';
 import { listen, emit, type UnlistenFn } from '@tauri-apps/api/event';
 import { openUrl } from '@tauri-apps/plugin-opener';
@@ -59,7 +60,7 @@ const authLabel = computed(() => ({ authorizationStateWaitPhoneNumber: '手机�
 const unlisteners: UnlistenFn[] = [];
 
 async function action(fn: () => Promise<void>) { const v=view.value;v.error='';v.busy=true;try{await fn();}catch(e){v.error=String(e);}finally{v.busy=false;} }
-function clearSession(id=profileId.value) { accountViews.reset(id);if(id===profileId.value){sessionToken++;authValue.value='';} }
+function clearSession(id=profileId.value) { clearAvatars(id);accountViews.reset(id);if(id===profileId.value){sessionToken++;authValue.value='';} }
 async function accountAction(fn:()=>Promise<void|boolean>){const id=profileId.value,v=view.value;v.accountError='';v.busy=true;try{const changed=await fn();if(changed!==false)await emitEvent('workspace-settings-changed',{source:settingsView?'settings':'main'});}catch(e){accountViews.get(id).accountError=String(e);}finally{v.busy=false;}}
 async function refreshSettings(){snapshot.value=await invokeCommand<SettingsSnapshot>('app_settings');if(!settingsView&&!snapshot.value.profiles.some(p=>p.profile_id===profileId.value))profileId.value=snapshot.value.primary_profile_id??'';const states=await invokeCommand<Connection[]>('account_statuses');states.forEach(accountViews.connection);const unknown=await invokeCommand<UnknownSend[]>('unknown_sends');unknown.forEach(accountViews.sent);}
 async function confirmPendingClose(profileId:string|null, initial?:CloseChallenge,logout=false):Promise<string|null|undefined>{
@@ -149,6 +150,7 @@ onMounted(async () => {
     unlisteners.push(await listen<Connection>('connection',e=>{
       const previous=e.payload.profile_id?statuses[e.payload.profile_id]:undefined;
       if(!accountViews.connection(e.payload))return;
+       if(e.payload.profile_id&&previous&&previous.generation!==e.payload.generation)clearAvatars(e.payload.profile_id);
       if(!settingsView&&e.payload.profile_id===profileId.value&&e.payload.runtime_state==='Ready'&&previous?.runtime_state!=='Ready')scheduleChats();
     }));
     unlisteners.push(await listen<{profile_id:string;generation:number;result:ScanResult}>('query-progress',e=>accountViews.progress(e.payload)));
@@ -168,7 +170,7 @@ onMounted(async () => {
     await refreshSettings();applySettings();const requested=settingsView?new URLSearchParams(window.location.search).get('profile'):null;profileId.value=settingsView?(requested??(profileId.value||snapshot.value?.primary_profile_id||snapshot.value?.profiles[0]?.profile_id||'')):(snapshot.value?.primary_profile_id??snapshot.value?.profiles[0]?.profile_id??'');await selectAccount();if(ready.value&&!settingsView)void loadChats();
   } catch(e) {accountError.value=String(e);}
 });
-onUnmounted(()=>{unlisteners.forEach(fn=>fn());clearTimeout(chatTimer);answerDialog(null);});
+onUnmounted(()=>{unlisteners.forEach(fn=>fn());clearTimeout(chatTimer);clearAvatars();answerDialog(null);});
 
 return { dialog,answerDialog,chatScope,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,preset,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetReport,resetBusy,resetLayout,resizeLayout };
 }
