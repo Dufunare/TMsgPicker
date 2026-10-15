@@ -41,6 +41,8 @@ pub struct TelegramMessage {
     pub content_kind: String,
     pub text: String,
     pub metrics: InteractionMetrics,
+    #[serde(default)]
+    pub thumbnail_file_id: Option<i32>,
 }
 fn numeric(v: &Value) -> Option<i64> {
     v.as_i64().or_else(|| v.as_str()?.parse().ok())
@@ -98,6 +100,18 @@ pub fn normalize(v: &Value) -> Result<TelegramMessage> {
             .or_else(|| content["caption"]["text"].as_str())
             .unwrap_or("")
             .into(),
+        thumbnail_file_id: match kind {
+            "messagePhoto" => content["photo"]["sizes"].as_array()
+                .and_then(|sizes| sizes.iter().filter_map(|size| {
+                    let file=&size["photo"];let id=file["id"].as_i64()?;
+                    let area=size["width"].as_i64().unwrap_or(0)*size["height"].as_i64().unwrap_or(0);
+                    Some((area,id))
+                }).filter(|(area,_)| *area>0).min_by_key(|(area,_)| (*area as i64-320*320).abs()).map(|(_,id)|id)),
+            "messageVideo" => content["video"]["thumbnail"]["file"]["id"].as_i64(),
+            "messageAnimation" => content["animation"]["thumbnail"]["file"]["id"].as_i64(),
+            "messageDocument" => content["document"]["thumbnail"]["file"]["id"].as_i64(),
+            _ => None,
+        }.and_then(|id|i32::try_from(id).ok()).filter(|id|*id>0),
         metrics: InteractionMetrics {
             views: numeric(&info["view_count"]),
             forwards: numeric(&info["forward_count"]),
