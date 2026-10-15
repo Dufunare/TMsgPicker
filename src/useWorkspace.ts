@@ -129,7 +129,7 @@ async function switchChatScope(scope:ChatScope){
   v.chatList=[]; // Do not show the previous list during a slow TDLib reload.
   await loadChats();
 }
-async function resolvePublic() {const id=profileId.value,v=view.value;await chatAction(async()=>{const c=await invokeCommand<Chat>('public_chat',{profileId:id,username:v.search});if(accountViews.views[id]!==v)return;if(!v.chatList.some(x=>x.id===c.id))v.chatList.unshift(c);v.selectedChat=c;});}
+async function resolvePublic() {const id=profileId.value,v=view.value;await chatAction(async()=>{const c=await invokeCommand<Chat>('public_chat',{profileId:id,username:v.search});if(accountViews.views[id]!==v)return;if(v.chatScope==='all'||(v.chatScope==='archive'?c.archived===true:c.archived!==true)){if(!v.chatList.some(x=>x.id===c.id))v.chatList.unshift(c);}v.selectedChat=c;});}
 async function savedMessages() {const id=profileId.value,v=view.value;await action(async()=>{const c=await invokeCommand<Chat>('saved_messages',{profileId:id});if(accountViews.views[id]!==v)return;if(!v.chatList.some(x=>x.id===c.id))v.chatList.push(c);v.target=c.id;v.confirmation=false;v.confirmedSelection=null;});}
 function preset() {filter.value={kind:'not',item:{kind:'and',items:[{kind:'is_null',field:{kind:'reply_info'}},{kind:'compare',field:{kind:'post_kind'},op:'eq',value:'single'}]}};}
 async function runQuery() {
