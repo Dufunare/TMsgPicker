@@ -3,7 +3,7 @@ import {computed} from 'vue';
 import {useWorkspaceContext} from '../useWorkspace';
 import {accountStatus} from '../accountViews';
 import AvatarPreview from './AvatarPreview.vue';
-const {snapshot,profileId,connection,accountError,notice,busy,resetBusy,passphrase,authLabel,authValue,connect,submitAuth,disconnect,logoutAccount,addAccount}=useWorkspaceContext();
+const {snapshot,profileId,connection,accountError,notice,busy,passphrase,authLabel,authValue,connect,submitAuth,disconnect,logoutAccount,addAccount}=useWorkspaceContext();
 const profile=computed(()=>snapshot.value?.profiles.find(p=>p.profile_id===profileId.value));
 const needsPassword=computed(()=>connection.value.runtime_state==='NeedsDatabasePassphrase'||(connection.value.user_disconnected&&!profile.value?.has_saved_database_secret)||connection.value.runtime_state==='Error');
 </script>
