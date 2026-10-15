@@ -7,7 +7,7 @@ const active=ref(false);
 const root=ref<HTMLElement>();
 const key=computed(()=>avatarKey(props.profileId,props.generation,props.account ? undefined : props.fileId));
 const cached=computed(()=>cachedAvatar(key.value));
-const url=computed(()=>cached.value||props.fallbackImage||'');
+const url=computed(()=>cached.value||(props.fileId||props.account?'':props.fallbackImage||''));
 let observer:IntersectionObserver|undefined;
 watch(key,()=>{if(active.value)void load();});
 async function load(){if(isTauri()&&(props.account||props.fileId))await requestAvatar(props.profileId,props.generation,props.account?undefined:props.fileId);}
