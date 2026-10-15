@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import {computed,ref,watch} from 'vue';
-import {invoke} from '@tauri-apps/api/core';
 import {requestAvatar,avatarKey,cachedAvatar} from '../media/avatarCache';
 import type {Message} from '../types';
 const props=defineProps<{member:Message;profileId:string;generation:number}>();
