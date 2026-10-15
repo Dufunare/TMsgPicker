@@ -1274,6 +1274,32 @@ async fn chats(app: tauri::AppHandle, profile_id: String, search: String, scope:
     .await
 }
 #[tauri::command]
+async fn photo_thumbnail(
+    app: tauri::AppHandle,
+    profile_id: String,
+    file_id: Option<i32>,
+) -> Result<Option<String>> {
+    background(move || {
+        let global = app.state::<AppState>();
+        let _gate = global.lifecycle.try_read().map_err(|_| "Application transition in progress")?;
+        let runtime = account(&global, &profile_id)?;
+        let _lock = runtime.lifecycle.try_lock().map_err(|_| "Session operation in progress")?;
+        // TDLib file IDs are process-scoped. Never accept a path or arbitrary URL from WebView.
+        let g = gateway(&runtime)?;
+        let id = match file_id {
+            Some(id) => id,
+            None => {
+                let me = g.request(json!({"@type":"getMe"}), &AtomicBool::new(false))?;
+                let Some(id) = me["profile_photo"]["small"]["id"].as_i64().and_then(|id| i32::try_from(id).ok()) else { return Ok(None) };
+                id
+            }
+        };
+        // File content is only read from this account's TDLib-managed files directory.
+        let root = with_store(&global, |store| Ok(store.session_root(&profile_id)?))?;
+        ChatService::thumbnail(g.as_ref(), i64::from(id), &root.join("files"))
+    }).await
+}
+#[tauri::command]
 async fn public_chat(app: tauri::AppHandle, profile_id: String, username: String) -> Result<Chat> {
     background(move || {
         let global = app.state::<AppState>();
@@ -2269,6 +2295,7 @@ pub fn run() {
             disconnect,
             chats,
             public_chat,
+            photo_thumbnail,
             saved_messages,
             start_query,
             cancel_query,
