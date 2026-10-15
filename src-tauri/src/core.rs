@@ -203,24 +203,26 @@ pub fn assemble(messages: &[TelegramMessage]) -> Vec<LogicalPost> {
         .map(|(key, mut members)| {
             members.sort_by_key(|m| (m.date, id(&m.key.message_id).unwrap_or(0)));
             members.dedup_by(|a, b| a.key == b.key);
-            let first = &members[0];
-            let album = first.media_album_id.is_some();
-            let mut metrics = InteractionMetrics::default();
+            // Canonical interaction owner: earliest caption-bearing member, otherwise first.
+            let primary = members.iter().find(|m| !m.text.is_empty()).unwrap_or(&members[0]);
+            let album = members[0].media_album_id.is_some();
+            let mut metrics = InteractionMetrics {
+                views: None, forwards: None,
+                reply_info: primary.metrics.reply_info,
+                reactions: primary.metrics.reactions.clone(),
+            };
             let mut provenance = BTreeMap::new();
+            provenance.insert("reply_info".into(),primary.key.message_id.clone());
+            provenance.insert("reactions".into(),primary.key.message_id.clone());
             for m in &members {
-                for (field, target, value) in [
-                    ("views", &mut metrics.views, m.metrics.views),
-                    ("forwards", &mut metrics.forwards, m.metrics.forwards),
-                    ("reply_info", &mut metrics.reply_info, m.metrics.reply_info),
+                for (field,target,value) in [
+                    ("views",&mut metrics.views,m.metrics.views),
+                    ("forwards",&mut metrics.forwards,m.metrics.forwards),
                 ] {
-                    if target.is_none() && value.is_some() {
-                        *target = value;
-                        provenance.insert(field.into(), m.key.message_id.clone());
+                    if let Some(value)=value && target.is_none_or(|old|value>old) {
+                        *target=Some(value);
+                        provenance.insert(field.into(),m.key.message_id.clone());
                     }
-                }
-                if metrics.reactions.is_none() && m.metrics.reactions.is_some() {
-                    metrics.reactions = m.metrics.reactions.clone();
-                    provenance.insert("reactions".into(), m.key.message_id.clone());
                 }
             }
             LogicalPost {
@@ -230,13 +232,9 @@ pub fn assemble(messages: &[TelegramMessage]) -> Vec<LogicalPost> {
                 } else {
                     PostKind::Single
                 },
-                representative: first.key.clone(),
-                date: first.date,
-                text: members
-                    .iter()
-                    .find(|m| !m.text.is_empty())
-                    .map(|m| m.text.clone())
-                    .unwrap_or_default(),
+                representative: primary.key.clone(),
+                date: primary.date,
+                text: primary.text.clone(),
                 metrics,
                 provenance,
                 partial: album,
@@ -254,9 +252,6 @@ pub enum Field {
     ReplyInfo,
     ReactionTotal,
     Reaction(String),
-    PostKind,
-    MediaAlbumId,
-    ContentKind,
     Date,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -283,6 +278,7 @@ pub enum FilterExpr {
         op: CompareOp,
         value: Scalar,
     },
+    ContainsContent { content_kind: String, exists: bool },
     IsNull {
         field: Field,
     },
@@ -331,18 +327,6 @@ pub fn field_value(p: &LogicalPost, f: &Field) -> Option<Scalar> {
                 .find(|r| r.key == ReactionKey::Emoji(e.clone()))
                 .map_or(0, |r| r.count)
         }),
-        Field::PostKind => {
-            return Some(Scalar::Text(
-                if p.kind == PostKind::Album {
-                    "album"
-                } else {
-                    "single"
-                }
-                .into(),
-            ));
-        }
-        Field::ContentKind => return Some(Scalar::Text(p.members[0].content_kind.clone())),
-        Field::MediaAlbumId => return p.members[0].media_album_id.clone().map(Scalar::Text),
     };
     n.map(Scalar::Number)
 }
@@ -355,6 +339,10 @@ fn scalar_cmp(a: &Scalar, b: &Scalar) -> Option<Ordering> {
 }
 pub fn evaluate(p: &LogicalPost, f: &FilterExpr) -> Truth {
     match f {
+        FilterExpr::ContainsContent{content_kind,exists} => {
+            let present=p.members.iter().any(|m|&m.content_kind==content_kind);
+            if present==*exists {Truth::True}else{Truth::False}
+        }
         FilterExpr::Compare { field, op, value } => {
             let Some(order) = field_value(p, field).and_then(|a| scalar_cmp(&a, value)) else {
                 return Truth::Unknown;
@@ -417,19 +405,11 @@ fn validate_filter(f: &FilterExpr, depth: usize) -> Result<()> {
         return Err("Filter nesting exceeds 16".into());
     }
     match f {
-        FilterExpr::Compare { field, value, .. } => {
-            let text = matches!(
-                field,
-                Field::PostKind | Field::ContentKind | Field::MediaAlbumId
-            );
-            if text != matches!(value, Scalar::Text(_)) {
-                return Err("Filter field/value type mismatch".into());
-            }
-            if matches!(field, Field::PostKind)
-                && !matches!(value, Scalar::Text(s) if s == "single" || s == "album")
-            {
-                return Err("post_kind must be single or album".into());
-            }
+        FilterExpr::ContainsContent{content_kind,..} => {
+            if !matches!(content_kind.as_str(),"text"|"photo"|"video"|"animation"|"document"|"audio"|"voice_note"|"video_note"|"sticker"|"poll") {return Err("Unsupported content type".into());}
+        }
+        FilterExpr::Compare{value,..} => {
+            if !matches!(value,Scalar::Number(_)){return Err("Numeric comparison requires numeric value".into());}
         }
         FilterExpr::And { items } | FilterExpr::Or { items } => {
             if items.len() > 100 {
