@@ -20,7 +20,7 @@ function hasMedia(members:{content_kind:string}[]){return members.some(m=>mediaK
     <article v-for="post in result?.posts??[]" :key="post.key" class="panel post">
       <div class="post-top"><strong>{{chatList.find(c=>c.id===post.representative.chat_id)?.title??selectedChat?.title??'Telegram'}}</strong><button :disabled="busy" @click="openPost(post)">查看原文 ↗</button></div>
       <p class="muted">{{date(post.date)}} · {{post.kind==='album'?'媒体组':'消息'}}<span v-if="post.partial"> · 部分内容</span></p>
-      <p v-if="post.text" class="post-text"><LinkedText :text="post.text"/></p>
+      <p v-if="post.text" class="post-text"><LinkedText :text="post.text" :links="post.links"/></p>
       <div v-if="hasMedia(post.members)" class="post-media">
         <button class="media-expander" type="button" :aria-expanded="!!expanded[post.key]" @click="expanded[post.key]=!expanded[post.key]">
           {{post.kind==='album'?'媒体组':post.members.find(m=>mediaKinds.has(m.content_kind))?.content_kind}} · {{post.members.filter(m=>mediaKinds.has(m.content_kind)).length}} 项

@@ -1,0 +1,34 @@
+/* Shared visual-only selection treatment for chat scope and settings navigation.
+   Each owner supplies its selected index and indicator geometry; no business logic lives here. */
+:root[data-motion="on"] .segmented-tabs { position:relative; isolation:isolate; }
+:root[data-motion="on"] .segmented-tabs > button {
+  position:relative; z-index:1; background:transparent; border-color:transparent;
+  transition:color .2s ease,background-color .22s ease,border-color .2s ease;
+}
+:root[data-motion="on"] .segmented-tabs > button[aria-pressed="true"] {
+  color:var(--accent); background:transparent; border-color:transparent;
+}
+:root[data-motion="on"] .segmented-tabs::before {
+  content:""; position:absolute; z-index:0;
+  top:var(--segment-top); bottom:var(--segment-bottom); left:var(--segment-left);
+  width:calc((100% - var(--segment-width-deduction)) / 3);
+  background:var(--accent-soft); border:1px solid var(--border-subtle);
+  border-radius:calc(var(--radius)*.55);
+  transform:translateX(calc(var(--segment-index,0)*(100% + var(--segment-gap))));
+  transition:transform .28s cubic-bezier(.2,.7,.15,1);
+  pointer-events:none;
+}
+
+/* Used with mode=out-in for chat lists, and overlapping v-show panels for settings.
+   Disabled motion and OS reduced-motion use the existing global motion controls. */
+.selection-fade-enter-active,.selection-fade-leave-active {
+  transition:opacity .18s ease,transform .18s ease;
+}
+.selection-fade-enter-from {opacity:0;transform:translateY(6px);}
+.selection-fade-leave-to {opacity:0;transform:translateY(-4px);}
+.selection-fade-leave-active {pointer-events:none;}
+:root[data-motion="off"] .selection-fade-enter-active,
+:root[data-motion="off"] .selection-fade-leave-active {transition:none;}
+@media(prefers-reduced-motion:reduce){
+  .selection-fade-enter-active,.selection-fade-leave-active {transition:none!important;}
+}

@@ -8,6 +8,7 @@
 .color-input input:last-child { flex:1; min-width:0; }
 .appearance-advanced .appearance-inline { margin-top:12px; }
 .appearance-advanced input[type="range"] { accent-color:var(--accent); }
+.appearance-inline .motion-toggle { grid-column:1 / -1; }
 .saved-indicator { color:var(--success); font-size:calc(11px * var(--font-scale)); }
 .appearance-actions { margin-top:12px; }
 @media(max-width:430px){.appearance-presets{grid-template-columns:repeat(2,minmax(0,1fr));}.appearance-inline{grid-template-columns:1fr;}}

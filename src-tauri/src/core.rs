@@ -1,3 +1,5 @@
+use crate::formatted_text::extract_text_links;
+pub use crate::formatted_text::TextLink;
 use crate::gateway::{Result, TelegramGateway, id};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -40,6 +42,8 @@ pub struct TelegramMessage {
     pub media_album_id: Option<String>,
     pub content_kind: String,
     pub text: String,
+    #[serde(default)]
+    pub links: Vec<TextLink>,
     pub metrics: InteractionMetrics,
     #[serde(default)]
     pub thumbnail_file_id: Option<i32>,
@@ -84,6 +88,11 @@ pub fn normalize(v: &Value) -> Result<TelegramMessage> {
         .filter(|n| *n > 0)
         .ok_or("Message has no valid ID")?;
     let content = &v["content"];
+    let formatted = if content["text"]["text"].is_string() {
+        &content["text"]
+    } else {
+        &content["caption"]
+    };
     let kind = content["@type"].as_str().unwrap_or("unknown");
     let info = &v["interaction_info"];
     let reactions = info["reactions"]["reactions"]
@@ -126,11 +135,8 @@ pub fn normalize(v: &Value) -> Result<TelegramMessage> {
             .filter(|n| *n != 0)
             .map(|n| n.to_string()),
         content_kind: kind.strip_prefix("message").unwrap_or(kind).to_lowercase(),
-        text: content["text"]["text"]
-            .as_str()
-            .or_else(|| content["caption"]["text"].as_str())
-            .unwrap_or("")
-            .into(),
+        text: formatted["text"].as_str().unwrap_or("").into(),
+        links: extract_text_links(formatted),
         // Real TDLib video thumbnails are not always JPEG; the media loader sniffs
         // the returned format and the tiny JPEG serves only as a loading fallback.
         thumbnail_file_id: match kind {
@@ -180,6 +186,8 @@ pub struct LogicalPost {
     pub representative: MessageKey,
     pub date: i64,
     pub text: String,
+    #[serde(default)]
+    pub links: Vec<TextLink>,
     pub metrics: InteractionMetrics,
     pub provenance: BTreeMap<String, String>,
     pub partial: bool,
@@ -235,6 +243,7 @@ pub fn assemble(messages: &[TelegramMessage]) -> Vec<LogicalPost> {
                 representative: primary.key.clone(),
                 date: primary.date,
                 text: primary.text.clone(),
+                links: primary.links.clone(),
                 metrics,
                 provenance,
                 partial: album,

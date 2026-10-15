@@ -1,6 +1,7 @@
 #[cfg(feature = "desktop")]
 mod app;
 pub mod core;
+pub mod formatted_text;
 pub mod gateway;
 pub mod services;
 #[cfg(feature = "desktop")]
