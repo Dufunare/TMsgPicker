@@ -175,7 +175,7 @@ select {
 .viewer-arrow.prev {left:7px;}.viewer-arrow.next {right:7px;}
 .inline-date-wheel {display:grid;grid-template-columns:1.35fr repeat(4,minmax(0,1fr));gap:3px;overflow:hidden;padding:6px 4px;border:1px solid var(--border);border-radius:calc(var(--radius)*.72);background:var(--surface-subtle);}
 .inline-date-col {min-width:0;text-align:center;}.inline-date-label {font-size:10px;color:var(--text-muted);padding:2px;}
-.inline-date-track {height:96px;overflow-y:auto;scrollbar-width:none;overscroll-behavior:contain;}
+.inline-date-track {height:32px;overflow:hidden;scrollbar-width:none;overscroll-behavior:contain;}
 .inline-date-track::-webkit-scrollbar {display:none;}
 .inline-date-track button {display:block;width:100%;height:32px;min-height:32px;padding:0 2px;border:0;background:transparent;font-size:11px;}
 .inline-date-track button.active {background:var(--accent-soft);color:var(--accent);font-weight:700;}
