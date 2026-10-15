@@ -220,41 +220,112 @@ pub struct Chat {
     pub id: String,
     pub title: String,
     pub kind: String,
+    #[serde(default)]
+    pub archived: bool,
 }
+
+#[derive(Clone, Copy, Default, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ChatListScope {
+    #[default]
+    All,
+    Main,
+    Archive,
+}
+
 pub struct ChatService;
 impl ChatService {
     pub fn describe(v: Value) -> Result<Chat> {
+        let archived = v["positions"]
+            .as_array()
+            .is_some_and(|positions| positions.iter().any(|position| {
+                position["list"]["@type"] == "chatListArchive"
+            }));
         Ok(Chat {
             id: v["id"].as_i64().ok_or("Invalid chat ID")?.to_string(),
             title: v["title"].as_str().unwrap_or("Untitled").into(),
             kind: v["type"]["@type"].as_str().unwrap_or("unknown").into(),
+            archived,
         })
     }
-    pub fn list(g: &dyn TelegramGateway, search: &str) -> Result<Vec<Chat>> {
-        let c = AtomicBool::new(false);
-        if search.trim().is_empty()
-            && let Err(e) = g.request(
-                json!({"@type":"loadChats","chat_list":{"@type":"chatListMain"},"limit":100}),
-                &c,
-            )
-            && !e.contains("error 404")
-        {
-            return Err(e);
+
+    fn ids(value: Value) -> Result<Vec<Value>> {
+        Ok(value["chat_ids"]
+            .as_array()
+            .ok_or("Invalid chats response")?
+            .clone())
+    }
+
+    fn load_list(
+        g: &dyn TelegramGateway,
+        list: &str,
+        cancel: &AtomicBool,
+        max_pages: usize,
+    ) -> Result<()> {
+        for _ in 0..max_pages {
+            let result = g.request(
+                json!({"@type":"loadChats","chat_list":{"@type":list},"limit":100}),
+                cancel,
+            );
+            match result {
+                Ok(_) => {}
+                Err(e) if e.contains("error 404") => break, // TDLib: list fully loaded.
+                Err(e) => return Err(e),
+            }
         }
-        let v = g.request(
-            if search.trim().is_empty() {
-                json!({"@type":"getChats","chat_list":{"@type":"chatListMain"},"limit":100})
+        Ok(())
+    }
+
+    pub fn list(g: &dyn TelegramGateway, search: &str, scope: ChatListScope) -> Result<Vec<Chat>> {
+        let cancel = AtomicBool::new(false);
+        let search = search.trim();
+        let normalized = search.trim_start_matches('@').to_lowercase();
+        let mut result = Vec::new();
+        let mut seen = BTreeSet::new();
+
+        if scope != ChatListScope::Archive {
+            Self::load_list(g, "chatListMain", &cancel, 1)?;
+            let main = if search.is_empty() {
+                g.request(
+                    json!({"@type":"getChats","chat_list":{"@type":"chatListMain"},"limit":100}),
+                    &cancel,
+                )?
             } else {
-                json!({"@type":"searchChats","query":search,"limit":100})
-            },
-            &c,
-        )?;
-        let mut out = Vec::new();
-        for cid in v["chat_ids"].as_array().ok_or("Invalid chats response")? {
-            let v = g.request(json!({"@type":"getChat","chat_id":cid}), &c)?;
-            out.push(Self::describe(v)?);
+                // TDLib searchChats is offline and ordered by the main list; it cannot
+                // replace an explicit traversal of the Archive list.
+                g.request(json!({"@type":"searchChats","query":search,"limit":100}), &cancel)?
+            };
+            for cid in Self::ids(main)? {
+                let chat = Self::describe(g.request(json!({"@type":"getChat","chat_id":cid}), &cancel)?)?;
+                if (scope == ChatListScope::Main && chat.archived) || !seen.insert(chat.id.clone()) {
+                    continue;
+                }
+                result.push(chat);
+            }
         }
-        Ok(out)
+        if scope != ChatListScope::Main {
+            // loadChats can return a short page. For a named search, gradually
+            // populate the archive instead of searching only the first 100 chats.
+            // Keep the work bounded for accounts with extremely large archives.
+            Self::load_list(g, "chatListArchive", &cancel, if search.is_empty() { 1 } else { 12 })?;
+            let archive = g.request(
+                json!({"@type":"getChats","chat_list":{"@type":"chatListArchive"},"limit":if search.is_empty() { 100 } else { 1200 }}),
+                &cancel,
+            )?;
+            for cid in Self::ids(archive)? {
+                let mut chat = Self::describe(g.request(json!({"@type":"getChat","chat_id":cid}), &cancel)?)?;
+                chat.archived = true;
+                if !search.is_empty() && !chat.title.to_lowercase().contains(&normalized) {
+                    continue;
+                }
+                if seen.insert(chat.id.clone()) {
+                    result.push(chat);
+                } else if let Some(existing) = result.iter_mut().find(|v: &&mut Chat| v.id == chat.id) {
+                    existing.archived = true;
+                }
+            }
+        }
+        Ok(result)
     }
     pub fn public(g: &dyn TelegramGateway, username: &str) -> Result<Chat> {
         Self::describe(g.request(
