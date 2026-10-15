@@ -182,3 +182,6 @@ select {
 
 html.media-view,html.media-view body,html.media-view #app {min-width:0!important;width:100%;height:100%;overflow:hidden;background:transparent!important;}
 html.media-view .native-image-viewer {margin:0;max-width:none;}
+
+.media-video-cover img,.media-video-cover video {display:block;width:100%;height:100%;max-height:none;object-fit:cover;}
+.media-video-cover video {pointer-events:none;}
