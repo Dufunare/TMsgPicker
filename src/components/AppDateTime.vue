@@ -1,42 +1,42 @@
 <script setup lang="ts">
-import {computed,ref,onMounted,onUnmounted,nextTick} from 'vue';
+import {computed,ref,watch,nextTick,onMounted} from 'vue';
 const props=defineProps<{modelValue:string;label?:string;disabled?:boolean}>();
 const emit=defineEmits<{ 'update:modelValue':[value:string] }>();
-const open=ref(false),host=ref<HTMLElement>(),columns=ref<HTMLElement[]>([]);
 const now=new Date();
-const year=ref(now.getFullYear()),month=ref(now.getMonth()+1),day=ref(now.getDate()),hour=ref(0),minute=ref(0);
-const pad=(x:number)=>String(x).padStart(2,'0');
-const display=computed(()=>props.modelValue?.replace('T',' ')||'选择日期与时间');
-const days=computed(()=>new Date(year.value,month.value,0).getDate());
-const configs=computed(()=>[
- {key:'year',name:'年',items:Array.from({length:151},(_,i)=>1950+i)},
- {key:'month',name:'月',items:Array.from({length:12},(_,i)=>i+1)},
- {key:'day',name:'日',items:Array.from({length:days.value},(_,i)=>i+1)},
- {key:'hour',name:'时',items:Array.from({length:24},(_,i)=>i)},
- {key:'minute',name:'分',items:Array.from({length:60},(_,i)=>i)}
+const y=ref(now.getFullYear()),mo=ref(now.getMonth()+1),d=ref(now.getDate()),h=ref(0),mi=ref(0);
+const refs=ref<HTMLElement[]>([]);
+const pad=(v:number)=>String(v).padStart(2,'0');
+const days=computed(()=>new Date(y.value,mo.value,0).getDate());
+const selections=computed(()=>[y.value,mo.value,d.value,h.value,mi.value]);
+const columns=computed(()=>[
+ {name:'年',items:Array.from({length:151},(_,i)=>1950+i)},
+ {name:'月',items:Array.from({length:12},(_,i)=>i+1)},
+ {name:'日',items:Array.from({length:days.value},(_,i)=>i+1)},
+ {name:'时',items:Array.from({length:24},(_,i)=>i)},
+ {name:'分',items:Array.from({length:60},(_,i)=>i)}
 ]);
-const values=computed(()=>[year.value,month.value,day.value,hour.value,minute.value]);
-function set(index:number,value:number){if(index===0)year.value=value;else if(index===1)month.value=value;else if(index===2)day.value=value;else if(index===3)hour.value=value;else minute.value=value;
- day.value=Math.min(day.value,days.value);}
-function scrollToSelection(){columns.value.forEach((el,i)=>{el?.scrollTo({top:Math.max(0,configs.value[i]!.items.indexOf(values.value[i]!))*36,behavior:'instant'});});}
-function toggle(){if(props.disabled)return;if(props.modelValue){const d=new Date(props.modelValue);if(!Number.isNaN(d.valueOf())){year.value=d.getFullYear();month.value=d.getMonth()+1;day.value=d.getDate();hour.value=d.getHours();minute.value=d.getMinutes();}}
- open.value=!open.value;if(open.value)void nextTick(scrollToSelection);}
-function save(){emit('update:modelValue',`${year.value}-${pad(month.value)}-${pad(day.value)}T${pad(hour.value)}:${pad(minute.value)}`);open.value=false;}
-function wheel(index:number,event:WheelEvent){event.preventDefault();const items=configs.value[index]!.items;const current=values.value[index]!;const next=items[Math.max(0,Math.min(items.length-1,items.indexOf(current)+(event.deltaY>0?1:-1)))];if(next!==undefined)set(index,next);void nextTick(scrollToSelection);}
-function outside(e:PointerEvent){if(host.value&&!host.value.contains(e.target as Node))open.value=false;}
-function escape(e:KeyboardEvent){if(e.key==='Escape')open.value=false;}
-onMounted(()=>{document.addEventListener('pointerdown',outside);document.addEventListener('keydown',escape);});
-onUnmounted(()=>{document.removeEventListener('pointerdown',outside);document.removeEventListener('keydown',escape);});
+let applying=false;
+function sync(){if(applying)return;applying=true;
+ const match=props.modelValue.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+ if(match){y.value=+match[1]!;mo.value=+match[2]!;d.value=+match[3]!;h.value=+match[4]!;mi.value=+match[5]!;}
+ applying=false;void nextTick(align);
+}
+function align(){refs.value.forEach((el,i)=>{if(el)el.scrollTop=Math.max(0,columns.value[i]!.items.indexOf(selections.value[i]!))*32;});}
+function choose(i:number,val:number){
+ if(props.disabled)return;
+ if(i===0)y.value=val;else if(i===1)mo.value=val;else if(i===2)d.value=val;else if(i===3)h.value=val;else mi.value=val;
+ d.value=Math.min(d.value,days.value);
+ emit('update:modelValue',`${y.value}-${pad(mo.value)}-${pad(d.value)}T${pad(h.value)}:${pad(mi.value)}`);
+ void nextTick(align);
+}
+function wheel(i:number,e:WheelEvent){e.preventDefault();const a=columns.value[i]!.items,v=selections.value[i]!,n=a.indexOf(v);choose(i,a[Math.min(a.length-1,Math.max(0,n+(e.deltaY>0?1:-1)))]!);}
+watch(()=>props.modelValue,sync,{immediate:true});onMounted(align);
 </script>
-<template><div ref="host" class="app-date-time">
- <button type="button" class="app-select-trigger" :aria-label="label" :aria-expanded="open" :disabled="disabled" @click="toggle">{{display}}<span aria-hidden="true">▦</span></button>
- <div v-if="open" class="wheel-date-picker" role="dialog" :aria-label="label??'选择日期时间'">
-  <div class="wheel-columns"><div v-for="(config,i) in configs" :key="config.key" class="wheel-column">
-   <div class="wheel-label">{{config.name}}</div>
-   <div :ref="el=>{if(el)columns[i]=el as HTMLElement}" class="wheel-track" @wheel="wheel(i,$event)">
-    <button v-for="item in config.items" :key="item" type="button" :class="{selected:item===values[i]}" @click="set(i,item);nextTick(scrollToSelection)">{{pad(item)}}</button>
-   </div>
-  </div></div>
-  <div class="buttons"><button type="button" @click="open=false">取消</button><button type="button" class="primary" @click="save">确定</button></div>
+<template><div class="inline-date-wheel" :aria-label="label">
+ <div v-for="(column,i) in columns" :key="column.name" class="inline-date-col">
+  <div class="inline-date-label">{{column.name}}</div>
+  <div :ref="el=>{if(el)refs[i]=el as HTMLElement}" class="inline-date-track" @wheel="wheel(i,$event)">
+   <button v-for="item in column.items" :key="item" type="button" :class="{active:selections[i]===item}" :disabled="disabled" :aria-pressed="selections[i]===item" @click="choose(i,item)">{{i===0?item:pad(item)}}</button>
+  </div>
  </div>
 </div></template>
