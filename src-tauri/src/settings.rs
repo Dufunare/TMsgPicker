@@ -26,7 +26,10 @@ pub struct AppearancePreferences {
     pub spacing: u8,
     #[serde(default = "default_preview_size")]
     pub image_preview_size: u16,
+    #[serde(default = "default_animations")]
+    pub animations: bool,
 }
+fn default_animations() -> bool { true }
 fn default_preview_size() -> u16 { 250 }
 fn default_glass_opacity() -> u8 { 48 }
 fn default_glass_blur() -> u8 { 30 }
@@ -45,6 +48,7 @@ impl Default for AppearancePreferences {
             glass_blur: default_glass_blur(),
             spacing: default_spacing(),
             image_preview_size: default_preview_size(),
+            animations: default_animations(),
         }
     }
 }
