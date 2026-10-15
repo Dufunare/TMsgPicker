@@ -1195,3 +1195,36 @@ fn normalize_media_exposes_video_preview_and_full_photo_separately() {
     assert_eq!(p.thumbnail_file_id,Some(18));
     assert_eq!(p.full_file_id,Some(20));
 }
+
+#[test]
+fn account_media_accepts_tdlib_owned_file_and_database_cache_but_denies_external_paths() {
+    struct MediaMock { path: String }
+    impl TelegramGateway for MediaMock {
+        fn request(&self, request: Value, _: &AtomicBool) -> Result<Value> {
+            assert_eq!(request["@type"], "downloadFile");
+            Ok(json!({"local":{"is_downloading_completed":true,"path":self.path}}))
+        }
+        fn request_batch(&self, _: Vec<Value>, _: &AtomicBool) -> Result<Vec<Value>> { unreachable!() }
+    }
+    let tmp = std::env::temp_dir().join(format!(
+        "tmsg-media-path-{}-{}",std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    let session=tmp.join("session");
+    std::fs::create_dir_all(session.join("db")).unwrap();
+    std::fs::create_dir_all(session.join("files")).unwrap();
+    let image=[0xff,0xd8,0xff,0xd9];
+    let db_file=session.join("db").join("image.jpg");
+    let file=session.join("files").join("image.jpg");
+    let outside=tmp.join("outside.jpg");
+    for path in [&db_file,&file,&outside] {std::fs::write(path,image).unwrap();}
+    for path in [&db_file,&file] {
+        let mock=MediaMock{path:path.to_string_lossy().into_owned()};
+        assert!(ChatService::media_data(&mock,1,&session.join("files"),false).unwrap().unwrap().starts_with("data:image/jpeg;"));
+    }
+    let relative=MediaMock{path:"image.jpg".into()};
+    assert!(ChatService::media_data(&relative,1,&session.join("files"),false).unwrap().is_some());
+    let forbidden=MediaMock{path:outside.to_string_lossy().into_owned()};
+    assert!(ChatService::media_data(&forbidden,1,&session.join("files"),false).is_err());
+    std::fs::remove_dir_all(tmp).unwrap();
+}
