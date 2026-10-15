@@ -106,7 +106,7 @@ pub fn normalize(v: &Value) -> Result<TelegramMessage> {
                     let file=&size["photo"];let id=file["id"].as_i64()?;
                     let area=size["width"].as_i64().unwrap_or(0)*size["height"].as_i64().unwrap_or(0);
                     Some((area,id))
-                }).filter(|(area,_)| *area>0).min_by_key(|(area,_)| (*area as i64-320*320).abs()).map(|(_,id)|id)),
+                }).filter(|(area,_)| *area>0).min_by_key(|(area,_)| (*area-320*320).abs()).map(|(_,id)|id)),
             "messageVideo" => content["video"]["thumbnail"]["file"]["id"].as_i64(),
             "messageAnimation" => content["animation"]["thumbnail"]["file"]["id"].as_i64(),
             "messageDocument" => content["document"]["thumbnail"]["file"]["id"].as_i64(),
