@@ -1,7 +1,7 @@
 /* Liquid glass is an app theme. It never changes OS transparency or window access. */
 :root[data-theme="glass"] {
   --canvas:#edf3fa;
-  --surface:rgba(255,255,255,.48);
+  --surface:rgba(255,255,255,var(--glass-opacity,.48));
   --surface-subtle:rgba(255,255,255,.28);
   --surface-muted:rgba(230,239,250,.45);
   --field:rgba(255,255,255,.7);
@@ -23,15 +23,17 @@
 :root[data-theme="glass"] :where(body,.workspace,.settings-page) { background:var(--glass-canvas); }
 :root[data-theme="glass"] :where(.left-column,.middle-column,.right-column,.settings-content,.drawer,.account-menu-items,.confirmation-dialog) {
   background-image:linear-gradient(135deg,rgba(255,255,255,.2),transparent 42%,rgba(255,255,255,.08));
-  -webkit-backdrop-filter:blur(30px) saturate(120%);
-  backdrop-filter:blur(30px) saturate(120%);
+  -webkit-backdrop-filter:blur(var(--glass-blur,30px)) saturate(120%);
+  backdrop-filter:blur(var(--glass-blur,30px)) saturate(120%);
 }
 :root[data-theme="glass"] :where(.settings-card,.post,.user-card,.theme-tile,.authorization-form) {
   background-image:linear-gradient(135deg,rgba(255,255,255,.2),transparent 65%);
   box-shadow:inset 0 1px 0 rgba(255,255,255,.8);
 }
 /* Menus and sticky text remain legible over scrolling content. */
-:root[data-theme="glass"] :where(.account-menu-items,.confirmation-dialog,.result-header,.builder .buttons) { background-color:rgba(247,250,255,.94); }
+:root[data-theme="glass"] :where(.account-menu-items,.confirmation-dialog) { background-color:rgba(247,250,255,.94); }
+:root[data-theme="glass"] .builder .buttons { background:transparent; box-shadow:none; border-top-color:var(--border-subtle); }
+:root[data-theme="glass"] .result-header { background:var(--surface); }
 @supports not ((backdrop-filter:blur(1px)) or (-webkit-backdrop-filter:blur(1px))) {
   :root[data-theme="glass"] { --surface:#f6f9fd; --surface-subtle:#f9fbfe; --surface-muted:#eaf0f8; --field:#ffffff; }
 }
