@@ -1,19 +1,13 @@
-.appearance-settings { margin: 24px 0 6px; border-top: 1px solid var(--border-subtle); padding-top: 6px; }
-.settings-section-heading { display:flex; justify-content:space-between; align-items:baseline; gap:10px; }
-.setting-caption { color:var(--text-faint); font-size:11px; }
-.appearance-presets { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; margin:12px 0 16px; }
+.appearance-presets { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; margin:0 0 16px; }
 .theme-tile { display:flex; flex-direction:column; align-items:center; gap:6px; padding:13px 8px; border:1px solid var(--border); border-radius:calc(var(--radius) * .8); background:var(--surface-subtle); }
-.theme-tile .theme-glyph { font-size:22px; font-weight:400; line-height:1; }
+.theme-tile .theme-glyph { font-size:calc(22px * var(--font-scale)); font-weight:400; line-height:1; }
 .theme-tile.is-selected { background:var(--accent-soft); border-color:var(--accent); color:var(--accent); }
-.appearance-inline { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:8px 14px; }
+.appearance-inline { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px 14px; }
 .color-input { display:flex; align-items:center; gap:7px; }
-.color-input input[type="color"] { flex:0 0 43px; width:43px; height:35px; padding:3px; cursor:pointer; }
+.color-input input[type="color"] { flex:0 0 43px; width:43px; height:var(--control-height); padding:3px; cursor:pointer; }
 .color-input input:last-child { flex:1; min-width:0; }
-.appearance-advanced { margin:13px 0; padding:12px; border:1px solid var(--border-subtle); border-radius:calc(var(--radius) * .75); background:var(--surface-subtle); }
-.appearance-advanced summary { color:var(--text-strong); font-size:12px; font-weight:600; }
 .appearance-advanced .appearance-inline { margin-top:12px; }
 .appearance-advanced input[type="range"] { accent-color:var(--accent); }
-.setting-value { float:right; color:var(--text-muted); font-weight:400; }
-.saved-indicator { color:var(--success); font-size:11px; }
+.saved-indicator { color:var(--success); font-size:calc(11px * var(--font-scale)); }
 .appearance-actions { margin-top:12px; }
 @media(max-width:430px){.appearance-inline{grid-template-columns:1fr;}}

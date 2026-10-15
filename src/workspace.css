@@ -123,31 +123,3 @@ button.icon-button:hover:enabled,.icon-button:hover { background:var(--hover); c
 .drawer { position:absolute; right:10px; top:10px; bottom:10px; width:370px; max-width:90%; box-shadow:var(--shadow-popover); z-index:5; padding:12px; }
 .empty { padding:48px 24px; }
 .right-column .builder > h2 { letter-spacing:-.025em; }
-html.settings-view,html.settings-view body,html.settings-view #app { min-width:0; }
-.settings-page { height:100dvh; display:flex; flex-direction:column; background:var(--canvas); padding:12px; }
-.settings-content {
-  flex:1; min-height:0; overflow:auto; padding:19px 22px 22px;
-  border:1px solid var(--border); border-radius:var(--radius);
-  background:var(--surface); box-shadow:var(--shadow);
-}
-.settings-content h2 { margin:0 0 19px; }
-.settings-content h3 { margin:22px 0 10px; }
-.settings-content label { margin:12px 0; }
-.settings-content form > small { margin-top:8px; }
-.settings-proxy-address { display:grid; grid-template-columns:minmax(0,1fr) 90px; gap:10px; }
-.settings-security-actions { display:flex; flex-direction:column; align-items:flex-start; gap:8px; margin:14px 0; }
-.settings-account-actions { display:flex; gap:7px; flex-wrap:wrap; margin-top:18px; }
-.authorization-form { padding:12px; margin-top:14px; border-radius:var(--radius); background:var(--surface-subtle); }
-.debug-tools { margin-top:28px; border-top:1px solid var(--border); padding-top:10px; }
-.settings-content .buttons { margin-bottom:4px; }
-.settings-page .error { margin:12px 0; }
-@media(max-width:560px) { .settings-page { padding:7px; } .settings-content { padding:16px; } }
-
-/* Unified settings window tabs introduced after the theme branch diverged. */
-.settings-heading { display:flex; align-items:center; justify-content:space-between; flex-shrink:0; padding:3px 6px 10px; }
-.settings-heading h2 { margin:0; font-size:16px; color:var(--text-strong); }
-.settings-tabs { display:flex; flex-shrink:0; gap:5px; padding:0 5px 10px; }
-.settings-tabs button { flex:1; min-height:34px; background:var(--surface-subtle); border-color:var(--border-subtle); font-weight:550; }
-.settings-tabs button[aria-pressed="true"] { background:var(--accent-soft); color:var(--accent); border-color:var(--ring); }
-.settings-tabs button:disabled { cursor:not-allowed; }
-.settings-page > .settings-content { flex:1; min-height:0; }

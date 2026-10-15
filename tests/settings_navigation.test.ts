@@ -15,6 +15,7 @@ test('one settings controller switches subpages and explicit account targets wit
   const app=renderer.createApp({setup(){settings=useWorkspace(true,transport as Parameters<typeof useWorkspace>[1]);main=useWorkspace(false,transport as Parameters<typeof useWorkspace>[1]);settings.snapshot.value=fixture;settings.profileId.value='A';navigation=useSettingsNavigation(settings);return()=>h('div');}});app.mount({});
   main.profileId.value='B';settings.apiHash.value='unsaved synthetic API hash';settings.passphrase.value='unsaved synthetic session password';
   navigation.navigate({tab:'account',profile_id:'A'});assert.equal(settings.passphrase.value,'unsaved synthetic session password');
+  navigation.navigate({tab:'appearance',profile_id:null});assert.equal(navigation.tab.value,'appearance');assert.equal(settings.profileId.value,'A');assert.equal(settings.passphrase.value,'unsaved synthetic session password');assert.equal(settings.apiHash.value,'unsaved synthetic API hash');
   navigation.navigate({tab:'application',profile_id:null});navigation.navigate({tab:'account',profile_id:'B'});
   assert.equal(navigation.tab.value,'account');assert.equal(settings.profileId.value,'B');assert.equal(main.profileId.value,'B');assert.equal(settings.apiHash.value,'unsaved synthetic API hash');assert.equal(settings.passphrase.value,'');assert.deepEqual(calls,[]);
   settings.snapshot.value={...fixture,profiles:[fixture.profiles[0]]};await nextTick();assert.equal(settings.profileId.value,'A');

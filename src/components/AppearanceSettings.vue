@@ -17,8 +17,9 @@ async function save(){
 function defaults(){draft.value={...defaultAppearance};preview();}
 </script>
 <template>
-<section class="appearance-settings">
-  <div class="settings-section-heading"><h3>外观</h3><span class="setting-caption">全部窗口同步</span></div>
+<section class="settings-content appearance-settings">
+  <section class="settings-card" aria-labelledby="appearance-theme-title">
+  <h3 id="appearance-theme-title">主题与界面</h3>
   <div class="appearance-presets" role="group" aria-label="主题">
     <button v-for="option in [{id:'system',name:'跟随系统',icon:'◐'},{id:'light',name:'浅色',icon:'☀'},{id:'dark',name:'深色',icon:'☾'}]" :key="option.id" type="button" class="theme-tile" :class="{'is-selected':draft.theme===option.id}" :aria-pressed="draft.theme===option.id" @click="draft.theme=option.id as Appearance['theme'];preview()"><span class="theme-glyph" aria-hidden="true">{{option.icon}}</span><span>{{option.name}}</span></button>
   </div>
@@ -33,11 +34,12 @@ function defaults(){draft.value={...defaultAppearance};preview();}
       <select v-model="draft.density" @change="preview"><option value="comfortable">舒适</option><option value="compact">紧凑</option></select>
     </label>
   </div>
-  <details class="appearance-advanced">
+  </section>
+  <details class="settings-card appearance-advanced">
     <summary>高级外观设置</summary>
     <div class="appearance-inline">
-      <label>圆角 <span class="setting-value">{{draft.radius}}px</span><input v-model.number="draft.radius" type="range" min="6" max="22" step="1" @input="preview"></label>
-      <label>字号 <span class="setting-value">{{draft.font_scale}}%</span><input v-model.number="draft.font_scale" type="range" min="85" max="120" step="5" @input="preview"></label>
+      <label><span class="setting-label">圆角 <span class="setting-value">{{draft.radius}}px</span></span><input v-model.number="draft.radius" type="range" min="6" max="22" step="1" @input="preview"></label>
+      <label><span class="setting-label">字号 <span class="setting-value">{{draft.font_scale}}%</span></span><input v-model.number="draft.font_scale" type="range" min="85" max="120" step="5" @input="preview"></label>
       <label>阴影层次<select v-model="draft.elevation" @change="preview"><option value="flat">平面</option><option value="soft">柔和</option><option value="raised">浮起</option></select></label>
       <label>滚动条<select v-model="draft.scrollbar" @change="preview"><option value="slim">纤细</option><option value="standard">标准</option></select></label>
     </div>

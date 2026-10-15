@@ -3,12 +3,12 @@ import {invoke,isTauri} from '@tauri-apps/api/core';
 import {listen,type UnlistenFn} from '@tauri-apps/api/event';
 import type {Workspace} from './useWorkspace';
 
-export interface SettingsTarget {tab:'application'|'account';profile_id:string|null}
+export interface SettingsTarget {tab:'application'|'account'|'appearance';profile_id:string|null}
 export function useSettingsNavigation(workspace:Workspace,transport:typeof invoke=invoke,listenEvent:typeof listen=listen) {
-  const tab=ref<'application'|'account'>('application');
+  const tab=ref<SettingsTarget['tab']>('application');
   let unlisten:UnlistenFn|undefined,revision=0,disposed=false;
   function navigate(target:SettingsTarget){
-    if(disposed||!['application','account'].includes(target.tab))return;
+    if(disposed||!['application','account','appearance'].includes(target.tab))return;
     revision++;tab.value=target.tab;
     if(target.tab==='account'&&target.profile_id&&target.profile_id!==workspace.profileId.value){workspace.profileId.value=target.profile_id;void workspace.selectAccount();}
   }

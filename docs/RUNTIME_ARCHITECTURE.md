@@ -46,7 +46,7 @@ reset.rs 提供可由 Mock 实现的两阶段协调器：先从注册表枚举�
 
 managed_data.rs 统一固定所有者清理：检查绝对路径、禁止 ParentDir、检查所有祖先及整棵目录树，不跟随符号链接／Windows Reparse Point，清理后验证确实不存在。Windows 使用 OPEN_REPARSE_POINT 句柄检查节点，锁定祖先和当前节点禁止重命名／替换，并通过已验证的句柄删除，防止检查后路径被 Junction 替换。普通 delete_session 仍拒绝 Legacy；注销 Legacy 使用专用 cleanup_logged_out_session，仅删除 tdlib/db、tdlib/files，保护 tdlib/accounts。完整 Debug Reset 固定比对 LOCALAPPDATA/com.funare.tmsgpicker，不接受前端路径；开始删除后若失败，继续拒绝新账号任务／配置写入，只允许重试重置或安全退出。测试只使用 Mock 和独立临时合成目录。
 
-Vue 职责分离为 AccountPanel、AccountSettings、ApplicationSettings、LoginWizard。SettingsPage 在唯一 settings 窗口中用两个子页面呈现 ApplicationSettings／AccountSettings，应用选项不变；使用 v-show 保留切换时未保存的输入。useSettingsNavigation 先监听 settings-navigate，再读取进程内 settings_target，较新的事件优先；账号可显式选择，主窗口查看选择不自动重定向设置。注销后回退到仍存在的账号或显示添加引导，不关闭设置窗口。
+Vue 职责分离为 AccountPanel、AccountSettings、ApplicationSettings、AppearanceSettings、LoginWizard。SettingsPage 在唯一 settings 窗口中用三个同级子页面呈现 ApplicationSettings／AccountSettings／AppearanceSettings；使用 v-show 保留切换时未保存的输入。应用页按 API 与代理、全局敏感凭据、Debug 工具分组；账号页按身份、Session 恢复／授权、账号操作分组。共享卡片、标题和标签样式放在 theme/settings.css，外观预览与保存独立于应用配置和账号生命周期。useSettingsNavigation 先监听 settings-navigate，再读取进程内 settings_target，较新的事件优先；后端入口仍定位应用或账号子页面，外观由窗口内导航选择。账号可显式选择，主窗口查看选择不自动重定向设置。注销后回退到仍存在的账号或显示添加引导，不关闭设置窗口。
 
 useLogin 独立管理临时输入与授权状态，自动提交手机号期间显示等待，不闪现重复手机号输入。验证码／2FA 密码使用同一表单，login_auth_submit 在账号生命周期锁内校验 PendingLogin、generation 及实际授权状态，先提交 code，再等待实际 WaitPassword 才提交已填写密码。无 2FA 继续身份登记；验证码失败不提交密码，密码失败只重试密码。邮箱／设备确认保留真实授权流程。提交、取消、Ready、Client generation 变化或卸载时清空相应临时输入，不保存验证码／2FA。useApplicationSettings 继续只管理全局配置，useWorkspace / accountViews 保留账号视图和消息任务。
 
