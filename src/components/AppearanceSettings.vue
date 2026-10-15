@@ -48,6 +48,9 @@ function defaults(){draft.value={...defaultAppearance};preview();}
       <label><span class="setting-label">字号 <span class="setting-value">{{draft.font_scale}}%</span></span><input v-model.number="draft.font_scale" type="range" min="85" max="120" step="5" @input="preview"></label>
       <label>阴影层次<select v-model="draft.elevation" @change="preview"><option value="flat">平面</option><option value="soft">柔和</option><option value="raised">浮起</option></select></label>
       <label>滚动条<select v-model="draft.scrollbar" @change="preview"><option value="slim">纤细</option><option value="standard">标准</option></select></label>
+      <label><span class="setting-label">布局间距 <span class="setting-value">{{draft.spacing ?? 100}}%</span></span><input v-model.number="draft.spacing" type="range" min="75" max="140" step="5" @input="preview"></label>
+      <label><span class="setting-label">玻璃不透明度 <span class="setting-value">{{draft.glass_opacity ?? 48}}%</span></span><input v-model.number="draft.glass_opacity" type="range" min="20" max="90" step="5" :disabled="draft.theme!=='glass'" @input="preview"></label>
+      <label><span class="setting-label">玻璃模糊 <span class="setting-value">{{draft.glass_blur ?? 30}}px</span></span><input v-model.number="draft.glass_blur" type="range" min="0" max="60" step="5" :disabled="draft.theme!=='glass'" @input="preview"></label>
     </div>
   </details>
   <div class="buttons appearance-actions">
