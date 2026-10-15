@@ -1,7 +1,7 @@
-import {invoke} from '@tauri-apps/api/core';
+import {requestMedia} from './mediaRequests';
 import {reactive} from 'vue';
 
-const MAX_ITEMS=96, TTL=15*60*1000, MAX_ACTIVE=6;
+const MAX_ITEMS=96, TTL=15*60*1000, MAX_ACTIVE=1;
 type Item={url:string;expires:number};
 const cache=new Map<string,Item>();
 const inflight=new Map<string,Promise<string>>();
@@ -40,7 +40,7 @@ export async function requestAvatar(profile:string,generation:number,id?:number)
     await slot();
     try{
       if((generations.get(profile)??0)!==revision)return '';
-      const response=await invoke<string|null>('photo_thumbnail',{profileId:profile,fileId:id??null,full:false});
+      const response=await requestMedia(profile,generation,id??0,false);
       if((generations.get(profile)??0)!==revision)return '';
       const url=response && /^data:(image\/(jpeg|png|webp|gif)|video\/mp4);base64,/.test(response)?response:'';
       if(url.length>2_850_000)return '';
