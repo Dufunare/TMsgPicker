@@ -129,7 +129,7 @@ button.icon-button:hover:enabled,.icon-button:hover { background:var(--hover); c
 .builder form > h3 { margin:calc(12px * var(--spacing-scale,1)) 0 4px; }
 .builder form > label { margin:calc(4px * var(--spacing-scale,1)) 0; }
 .builder .buttons { margin-top:16px; }
-.chat-scope { display:flex; gap:4px; padding:3px 10px 8px; border-bottom:1px solid var(--border-subtle); }
+.chat-scope { display:flex; align-items:center; gap:4px; padding:8px 10px; min-height:44px; border-bottom:1px solid var(--border-subtle); }
 .chat-scope button { flex:1; min-height:27px; padding:3px 7px; background:transparent; border-color:transparent; font-size:11px; }
 .chat-scope button[aria-pressed="true"] { color:var(--accent); background:var(--accent-soft); border-color:var(--border-subtle); }
 .chat-archive-tag { margin-left:auto; font-size:10px; color:var(--text-muted); background:var(--surface-muted); border-radius:5px; padding:1px 5px; }
