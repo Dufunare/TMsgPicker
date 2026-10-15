@@ -682,7 +682,7 @@ fn album_cross_page_metrics_provenance_and_cross_chat() {
     assert_eq!(album.metrics.views, Some(99));
     assert_eq!(album.metrics.forwards, Some(8));
     assert_eq!(album.metrics.reply_info, None);
-    assert_eq!(album.metrics.reactions, None);
+    assert!(album.metrics.reactions.is_none());
     assert_eq!(album.provenance["reactions"], "300");
     assert!(album.partial);
     let raws: Vec<Value> = serde_json::from_str(include_str!("fixtures/messages.json")).unwrap();
