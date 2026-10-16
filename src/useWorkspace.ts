@@ -8,6 +8,7 @@ import { inject } from 'vue';
 import type { ChatScope, Chat, Connection, ForwardReport, Post, QuerySpec, ScanResult, SettingsSnapshot, CloseChallenge, UnknownSend } from './types';
 import {useApplicationSettings} from './useApplicationSettings.ts';
 import { createAccountViews, type AccountView } from './accountViews.ts';
+import {needsIncompleteConfirmation} from './scan/scanUi.ts';
 
 export function useWorkspace(settingsView = false, invokeCommand: typeof invoke = invoke, emitEvent: typeof emit = emit) {
 const snapshot=ref<SettingsSnapshot|null>(null), profileId=ref(''), rememberDatabase=ref(false), leftRatio=ref(.23), rightRatio=ref(.29);
@@ -172,7 +173,7 @@ async function prepareForward(){
   const selectedPosts=v.result?.posts.filter(p=>v.selected.includes(p.key))??[];
   const incomplete=selectedPosts.filter(p=>p.completeness.level==='Unknown'||p.completeness.level==='Truncated');
   let allowIncomplete=false;
-  if(incomplete.length) {
+  if(needsIncompleteConfirmation(selectedPosts)) {
     const answer=await askDialog({title:'确认转发可能不完整的 Post',
       text:`当前选中的 ${incomplete.length} 个 Post 的成员完整性无法确认，转发可能缺少媒体。请先检查来源；仍要继续预览并允许转发当前已取得的成员吗？`});
     if(!answer)return;

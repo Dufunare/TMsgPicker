@@ -16,6 +16,7 @@ pub struct PostAccumulator {
 impl PostAccumulator {
     pub fn new(from_head:bool)->Self {Self{upper_edge_seen:from_head,..Self::default()}}
     pub fn is_open(&self)->bool {!self.current.is_empty()}
+    pub fn mark_head(&mut self){if self.current.is_empty(){self.upper_edge_seen=true;}}
     /// Finalize standalone messages immediately; finalize Albums only when
     /// their *next* Post is observed, or true history exhaustion is reached.
     pub fn push(&mut self,m:TelegramMessage)->Vec<LogicalPost> {

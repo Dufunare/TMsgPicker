@@ -1,7 +1,7 @@
 //! Bounded TDLib history paging with a monotone cursor and global message dedupe.
 use crate::core::{normalize, MessageKey, TelegramMessage};
 use crate::gateway::{id, Result, TelegramGateway};
-use serde_json::{Value,json};
+use serde_json::json;
 use std::{collections::HashSet,sync::atomic::AtomicBool,time::Duration};
 
 pub enum Page {
@@ -53,6 +53,7 @@ impl<'a> HistoryReader<'a> {
             let limit=if self.anchor_pending {100} else {
                 (hint.saturating_add(usize::from(self.cursor!=0))).clamp(1,100)
             };
+            let was_anchor=self.anchor_pending;
             let raw=self.gateway.request(json!({"@type":"getChatHistory","chat_id":self.chat,
                 "from_message_id":self.cursor,"offset":self.offset,"limit":limit,
                 "only_local":false}),cancel)?;
@@ -64,7 +65,8 @@ impl<'a> HistoryReader<'a> {
                 // A date seek is trusted only when the returned window visibly
                 // crosses the requested upper boundary. Otherwise restart at
                 // HEAD, even if it costs more raw messages.
-                if !first.is_some_and(|v| v["chat_id"].as_i64()==Some(self.chat)
+                let includes_anchor=list.iter().any(|v|v["id"].as_i64()==Some(self.cursor));
+                if !includes_anchor || !first.is_some_and(|v| v["chat_id"].as_i64()==Some(self.chat)
                     && v["date"].as_i64().zip(to_bound).is_some_and(|(d,to)|d>=to)) {
                     self.cursor=0;self.offset=0;self.from_head=true;
                     self.stagnant=0;
@@ -81,10 +83,7 @@ impl<'a> HistoryReader<'a> {
                     return Err("History returned another chat".into());
                 }
                 let mid=id(&m.key.message_id)?;
-                if self.cursor!=0 && !self.from_head && self.offset==0 {
-                    // The initial offset(-99) may include newer IDs; accept them.
-                }
-                if self.cursor!=0 && mid>=self.cursor && self.from_head {
+                if self.cursor!=0 && mid>=self.cursor && !was_anchor {
                     continue;
                 }
                 // For an anchored first window, accept newer messages once;
@@ -95,7 +94,7 @@ impl<'a> HistoryReader<'a> {
                     self.raw_messages_read+=1;
                 }
             }
-            if next==0 || (self.cursor!=0 && next>=self.cursor) {
+            if next==0 || (!was_anchor && self.cursor!=0 && next>=self.cursor) {
                 if self.stagnant<2 {
                     self.stagnant+=1;
                     std::thread::sleep(Duration::from_millis(120));

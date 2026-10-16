@@ -10,17 +10,37 @@ use crate::core::{query_posts, evaluate, LogicalPost, QuerySpec, ScanResult, Sca
 use crate::gateway::{Result, TelegramGateway};
 use std::{sync::atomic::{AtomicBool,Ordering},time::{Duration,Instant}};
 
-const MAX_RAW_MESSAGES:usize=100_000;
-const MAX_PAGES:usize=2_500;
-const MAX_DURATION:Duration=Duration::from_secs(300);
-// A boundary can be probed after the normal raw limit, but this is bounded.
-const MAX_BOUNDARY_MESSAGES:usize=64;
+/// Internal resource guards. These do not change user-visible Post counts.
+#[derive(Clone,Copy,Debug)]
+pub struct ScanLimits {
+    pub max_raw_messages:usize,
+    pub max_pages:usize,
+    pub max_duration:Duration,
+    pub max_boundary_messages:usize,
+}
+impl Default for ScanLimits {
+    fn default()->Self {
+        Self{max_raw_messages:100_000,max_pages:2_500,
+            max_duration:Duration::from_secs(300),max_boundary_messages:64}
+    }
+}
 
 pub fn scan(
     gateway:&dyn TelegramGateway,
     spec:&QuerySpec,
     run_id:String,
     cancel:&AtomicBool,
+    progress:impl FnMut(ScanResult),
+)->Result<ScanResult> {
+    scan_with_limits(gateway,spec,run_id,cancel,ScanLimits::default(),progress)
+}
+
+pub fn scan_with_limits(
+    gateway:&dyn TelegramGateway,
+    spec:&QuerySpec,
+    run_id:String,
+    cancel:&AtomicBool,
+    limits:ScanLimits,
     mut progress:impl FnMut(ScanResult),
 )->Result<ScanResult> {
     spec.validate()?;
@@ -43,11 +63,11 @@ pub fn scan(
             status=ScanStatus::Interrupted;reason=Some(StopReason::UserCancelled);
             detail="Cancelled by user".into();break;
         }
-        if reader.pages>=MAX_PAGES || started.elapsed()>=MAX_DURATION {
+        if reader.pages>=limits.max_pages || started.elapsed()>=limits.max_duration {
             status=ScanStatus::BudgetExceeded;reason=Some(StopReason::ResourceLimitReached);
             detail="Page or duration safety limit reached".into();break;
         }
-        let raw_limit=MAX_RAW_MESSAGES.saturating_add(MAX_BOUNDARY_MESSAGES);
+        let raw_limit=limits.max_raw_messages.saturating_add(limits.max_boundary_messages);
         if processed_raw>=raw_limit {
             status=ScanStatus::BudgetExceeded;reason=Some(StopReason::ResourceLimitReached);
             detail="Raw-message safety limit reached while resolving Post boundary".into();break;
@@ -92,11 +112,12 @@ pub fn scan(
                 detail="History exhausted".into();break;
             }
             Page::Items(messages)=>{
+                if reader.from_head()&&!assembler.is_open(){assembler.mark_head();}
                 for message in messages {
                     // A strict, independent resource ceiling. We may spend a small
                     // additional allowance only while an Album boundary is open.
-                    if processed_raw>=MAX_RAW_MESSAGES {
-                        if !assembler.is_open() || boundary_extra>=MAX_BOUNDARY_MESSAGES {
+                    if processed_raw>=limits.max_raw_messages {
+                        if !assembler.is_open() || boundary_extra>=limits.max_boundary_messages {
                             status=ScanStatus::BudgetExceeded;reason=Some(StopReason::ResourceLimitReached);
                             detail="Raw-message safety limit reached".into();break 'scan;
                         }
@@ -125,7 +146,7 @@ pub fn scan(
         if last_progress.is_none_or(|at|at.elapsed()>=Duration::from_millis(500)) {
             last_progress=Some(Instant::now());
             progress(snapshot(&run_id,spec,ScanStatus::Running,None,"Scanning; ranking is provisional",
-                &reader,&scope,&eligible,finalized,false));
+                &reader,&scope,&eligible,finalized,false,processed_raw));
         }
     }
     // Only offer a partial open group when the scan ended abnormally.
@@ -140,14 +161,14 @@ pub fn scan(
         }
     }
     let covered=status==ScanStatus::Complete;
-    Ok(snapshot(&run_id,spec,status,reason,&detail,&reader,&scope,&eligible,finalized,covered))
+    Ok(snapshot(&run_id,spec,status,reason,&detail,&reader,&scope,&eligible,finalized,covered,processed_raw))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn snapshot(
     run_id:&str,spec:&QuerySpec,status:ScanStatus,reason:Option<StopReason>,detail:&str,
     reader:&HistoryReader<'_>,scope:&ScopeController<'_>,eligible:&[LogicalPost],
-    finalized:usize,complete:bool,
+    finalized:usize,complete:bool,processed_raw:usize,
 )->ScanResult {
     let matched=eligible.iter().filter(|p|evaluate(p,&spec.filter)==Truth::True).count();
     let posts=query_posts(eligible,spec);
@@ -161,7 +182,7 @@ fn snapshot(
             posts_matched:matched,posts_returned:returned,pages:reader.pages},
         // Legacy counters stay temporarily for existing UI integrations; no
         // completeness decision is made using this alias.
-        scanned:reader.raw_messages_read,pages:reader.pages,exact:complete,
+        scanned:processed_raw,pages:reader.pages,exact:complete,
         posts,
     }
 }

@@ -22,7 +22,7 @@ export type FieldName = 'views' | 'forwards' | 'comments' | 'reply_info' | 'reac
 export interface Field { kind: FieldName; emoji?: string }
 export type CompareOp = 'eq' | 'ne' | 'gt' | 'ge' | 'lt' | 'le';
 export type Filter = { kind: 'compare'; field: Field; op: CompareOp; value: number | string } | { kind: 'is_null' | 'is_not_null'; field: Field } | { kind: 'contains_content'; content_kind: string; exists: boolean } | { kind: 'and' | 'or'; items: Filter[] } | { kind: 'not'; item: Filter };
-export interface QuerySpec { version: 1; chat_id: string; scope: ScanScope; filter: Filter; sort: { field: Field; descending: boolean }[]; output_limit: number }
+export interface QuerySpec { version: 2; chat_id: string; scope: ScanScope; filter: Filter; sort: { field: Field; descending: boolean }[]; output_limit: number }
 export interface ActionItem { source: MessageKey; state: string; detail: string; sent_id: string | null }
 export interface ForwardReport { items: ActionItem[] }
 export interface UnknownSend { profile_id: string; generation: number; target: string; old_message_id: string; state: string }

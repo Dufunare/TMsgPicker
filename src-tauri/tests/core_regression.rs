@@ -429,7 +429,7 @@ fn page(messages: Vec<Value>) -> Value {
 }
 fn spec(count: usize) -> QuerySpec {
     QuerySpec {
-        version: 1,
+        version: 2,
         chat_id: "-1001".into(),
         scope: Scope::Recent { count },
         filter: FilterExpr::And { items: vec![] },
@@ -604,7 +604,7 @@ fn short_page_one_then_49_reaches_50_and_output_does_not_stop_scan() {
     assert!(r.exact);
     assert_eq!(g.requests.lock().unwrap()[0]["limit"], 50);
     assert_eq!(g.requests.lock().unwrap()[1]["from_message_id"], 100);
-    assert_eq!(progress[0].status, ScanStatus::Scanning);
+    assert_eq!(progress[0].status, ScanStatus::Running);
     assert!(!progress[0].exact);
 }
 #[test]
@@ -624,7 +624,7 @@ fn duplicate_cursor_empty_and_no_progress_are_distinct() {
         page(vec![message(100)]),
     ]);
     let r = scan(&g, &spec(50), "a".into(), &AtomicBool::new(false), |_| {}).unwrap();
-    assert_eq!(r.status, ScanStatus::Partial);
+    assert_eq!(r.status, ScanStatus::Interrupted);
     assert!(!r.exact);
 }
 #[test]
@@ -642,7 +642,7 @@ fn final_remaining_one_reserves_inclusive_cursor_slot() {
 fn cancellation_before_and_during_request_and_error_keep_results() {
     let g = MockTelegramGateway::pages(vec![]);
     let r = scan(&g, &spec(50), "a".into(), &AtomicBool::new(true), |_| {}).unwrap();
-    assert_eq!(r.status, ScanStatus::Cancelled);
+    assert_eq!(r.status, ScanStatus::Interrupted);
     assert!(g.requests.lock().unwrap().is_empty());
     let mut g = MockTelegramGateway::pages(vec![]);
     g.cancel_history = true;
@@ -650,7 +650,7 @@ fn cancellation_before_and_during_request_and_error_keep_results() {
         scan(&g, &spec(50), "a".into(), &AtomicBool::new(false), |_| {})
             .unwrap()
             .status,
-        ScanStatus::Cancelled
+        ScanStatus::Interrupted
     );
     let g = MockTelegramGateway::pages(vec![page(vec![message(100)])]);
     g.pages
@@ -670,7 +670,7 @@ fn cancelled_progress_does_not_finish_complete() {
         c.store(true, Ordering::Relaxed)
     })
     .unwrap();
-    assert_eq!(r.status, ScanStatus::Cancelled);
+    assert_eq!(r.status, ScanStatus::Interrupted);
     assert_eq!(r.scanned, 1);
 }
 #[test]
@@ -684,7 +684,7 @@ fn album_cross_page_metrics_provenance_and_cross_chat() {
     assert_eq!(album.metrics.reply_info, None);
     assert!(album.metrics.reactions.is_none());
     assert_eq!(album.provenance["reactions"], "300");
-    assert!(album.partial);
+    assert_eq!(album.completeness.level, CompletenessLevel::Unknown);
     let raws: Vec<Value> = serde_json::from_str(include_str!("fixtures/messages.json")).unwrap();
     let g = MockTelegramGateway::pages(vec![
         page(vec![raws[0].clone()]),
@@ -692,8 +692,9 @@ fn album_cross_page_metrics_provenance_and_cross_chat() {
     ]);
     let r = scan(&g, &spec(2), "a".into(), &AtomicBool::new(false), |_| {}).unwrap();
     assert_eq!(r.posts[0].members.len(), 2);
-    assert_eq!(r.status, ScanStatus::Partial);
-    assert!(!r.exact);
+    assert_eq!(r.status, ScanStatus::Complete);
+    assert_eq!(r.posts[0].completeness.level, CompletenessLevel::Assumed);
+    assert!(r.coverage.scope_complete);
 }
 #[test]
 fn ids_reactions_fallback_and_null_zero_semantics() {
@@ -830,7 +831,7 @@ fn numeric_comparators_types_and_version_validation() {
     s.filter = cmp(Field::Views, CompareOp::Eq, Scalar::Text("bad".into()));
     assert!(s.validate().is_err());
     s = spec(1);
-    s.version = 2;
+    s.version = 3;
     assert!(s.validate().is_err());
     s = spec(0);
     assert!(s.validate().is_err());
@@ -872,7 +873,7 @@ fn date_scope_half_open_budget_partial_and_lower_boundary_complete() {
     s.scope = Scope::Dates {
         from: 95,
         to: 99,
-        budget: 10,
+        limit_posts: Some(10),
     };
     s.output_limit = 20;
     let g = MockTelegramGateway::pages(vec![page((90..=100).rev().map(message).collect())]);
@@ -883,12 +884,13 @@ fn date_scope_half_open_budget_partial_and_lower_boundary_complete() {
     s.scope = Scope::Dates {
         from: 1,
         to: 99,
-        budget: 2,
+        limit_posts: Some(2),
     };
     let g = MockTelegramGateway::pages(vec![page(vec![message(100), message(99)])]);
     let r = scan(&g, &s, "a".into(), &AtomicBool::new(false), |_| {}).unwrap();
-    assert_eq!(r.status, ScanStatus::Partial);
-    assert!(!r.exact);
+    assert_eq!(r.status, ScanStatus::Complete);
+    assert_eq!(r.coverage.examined_posts,0); // all sampled messages are outside [from,to).
+    assert_eq!(r.coverage.date_window_exhausted,Some(true));
 }
 #[test]
 fn forward_grouped_sorted_100_protected_and_null_partial_failure() {
@@ -1095,7 +1097,8 @@ fn permanently_stagnant_cursor_is_bounded() {
         |_| {},
     )
     .unwrap();
-    assert_eq!(r.status, ScanStatus::Partial);
+    assert_eq!(r.status, ScanStatus::Interrupted);
+    assert_eq!(r.stop_reason,Some(StopReason::CursorStalled));
     assert_eq!(r.scanned, 1);
     assert_eq!(r.pages, 4);
 }
@@ -1159,7 +1162,8 @@ fn recent_n_counts_complete_media_group_as_one_logical_post() {
     ]);
     let mut spec=spec(2);spec.output_limit=8;
     let r=scan(&g,&spec,"album-logical".into(),&AtomicBool::new(false),|_|{}).unwrap();
-    assert_eq!(r.scanned,4); // one text + three album members
+    assert_eq!(r.coverage.examined_posts,2); // one text Post + one Album Post
+    assert_eq!(r.posts.iter().map(|p|p.members.len()).sum::<usize>(),4);
     assert_eq!(r.posts.len(),2);
     assert_eq!(r.posts.iter().find(|p|p.kind==PostKind::Album).unwrap().members.len(),3);
     assert!(r.posts.iter().all(|p|p.members.iter().all(|m|m.key.message_id!="108")));
@@ -1171,7 +1175,7 @@ fn recent_single_message_still_stops_at_exact_count() {
     let g=MockTelegramGateway::pages(vec![page((90..=100).rev().map(message).collect())]);
     let mut spec=spec(3);spec.output_limit=5;
     let r=scan(&g,&spec,"singles".into(),&AtomicBool::new(false),|_|{}).unwrap();
-    assert_eq!(r.scanned,3);
+    assert_eq!(r.coverage.examined_posts,3);
     assert_eq!(r.posts.len(),3);
     assert_eq!(r.pages,1);
 }

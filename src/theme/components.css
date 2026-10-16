@@ -44,7 +44,7 @@ button.primary:hover:not(:disabled) { background: var(--accent-hover); border-co
 .panel { min-width: 0; }
 .badge { display: inline-flex; align-items: center; border-radius: 999px; padding: 3px 9px; font-size: 11px; color: var(--accent); background: var(--accent-soft); }
 .badge.Complete { color: var(--success); background: var(--surface-muted); }
-.badge.Partial, .badge.Cancelled { color: var(--warning); background: var(--surface-muted); }
+.badge.BudgetExceeded, .badge.Interrupted { color: var(--warning); background: var(--surface-muted); }
 .badge.Error { color: var(--danger); background: var(--danger-bg); }
 .filter-node {
   display: flex; flex-wrap: wrap; align-items: flex-start; gap: 7px;
