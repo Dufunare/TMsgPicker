@@ -89,10 +89,9 @@ button.icon-button:hover:enabled,.icon-button:hover { background:var(--hover); c
 .builder { padding:18px 17px 0; }
 .builder h2 { margin:0 0 14px; }
 .builder h3 { margin:19px 0 10px; }
-.builder form { padding-bottom:75px; }
 .builder .buttons {
-  position:sticky; bottom:0; background:transparent; padding:calc(12px * var(--spacing-scale,1)) 0;
-  border-top:1px solid var(--border-subtle); z-index:2;
+  padding:calc(12px * var(--spacing-scale,1)) 0;
+  border-top:1px solid var(--border-subtle);
 }
 .builder form > button { margin-top:9px; }
 .filter-children { padding-left:8px; }
