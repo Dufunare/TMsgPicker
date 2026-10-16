@@ -37,11 +37,7 @@ function hasMedia(members:{content_kind:string}[]){return members.some(m=>mediaK
     </div>
     <div v-if="!result" class="panel empty">{{selectedChat?'请在右侧 Query Builder 执行查询':'请先选择聊天'}}</div>
     <div v-else-if="!result.posts.length" class="panel empty">{{scanning?'正在读取历史…':'当前范围没有匹配帖子'}}</div>
-    <div v-if="posts.length>PAGE_SIZE" class="result-pagination" role="navigation" aria-label="扫描结果分页">
-      <span>第 {{page}} / {{pageCount}} 页 · 共 {{posts.length}} 个结果</span>
-      <button type="button" :disabled="page<=1" @click="changePage(page-1)" aria-label="上一页">上一页</button>
-      <button type="button" :disabled="page>=pageCount" @click="changePage(page+1)" aria-label="下一页">下一页</button>
-    </div>
+
     <article v-for="post in visiblePosts" :key="post.key" class="panel post">
       <div class="post-top"><strong>{{chatList.find(c=>c.id===post.representative.chat_id)?.title??selectedChat?.title??'Telegram'}}</strong><button :disabled="busy" @click="openPost(post)">查看原文 ↗</button></div>
       <p class="muted">{{date(post.date)}} · {{post.kind==='album'?'媒体组':'消息'}}<span v-if="post.completeness.level!=='Verified'" class="post-completeness" :title="post.completeness.reason"> · {{postCompletenessLabel(post.completeness.level)}}</span></p>
@@ -58,5 +54,10 @@ function hasMedia(members:{content_kind:string}[]){return members.some(m=>mediaK
       <div class="metrics"><span>浏览 <b>{{count(post.metrics.views)}}</b></span><span>转发 <b>{{count(post.metrics.forwards)}}</b></span><span>评论 <b>{{count(post.metrics.reply_info)}}</b></span></div>
       <div class="reactions"><span v-if="post.metrics.reactions===null">反应 —</span><span v-else-if="!post.metrics.reactions.length">反应 0</span><span v-for="(reaction,i) in post.metrics.reactions??[]" :key="i">{{reactionLabel(reaction.key)}} {{count(reaction.count)}}</span></div>
     </article>
+        <div v-if="posts.length>PAGE_SIZE" class="result-pagination" role="navigation" aria-label="扫描结果分页">
+      <span>第 {{page}} / {{pageCount}} 页 · 共 {{posts.length}} 个结果</span>
+      <button type="button" :disabled="page<=1" @click="changePage(page-1)" aria-label="上一页">上一页</button>
+      <button type="button" :disabled="page>=pageCount" @click="changePage(page+1)" aria-label="下一页">下一页</button>
+    </div>
   </section>
 </template>
