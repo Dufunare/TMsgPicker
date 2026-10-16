@@ -43,7 +43,7 @@ if ($LASTEXITCODE -ne 0) { throw 'Could not inspect built NSIS installer.' }
 $installerPaths = @($listing | ForEach-Object {
     if ($_ -match '^Path = (.+)$') { $Matches[1].Trim() }
 })
-foreach ($name in ($runtimeNames + @('licenses\TDLib.txt', 'licenses\OpenSSL.txt', 'licenses\zlib.txt'))) {
+foreach ($name in ($runtimeNames + @('licenses\TMsgPicker-MIT.txt', 'licenses\TDLib.txt', 'licenses\OpenSSL.txt', 'licenses\zlib.txt'))) {
     $regex = '(?i)(^|[\\/])' + [regex]::Escape($name.Replace('\', '/')).Replace('/', '[\\/]') + '$'
     if (-not @($installerPaths | Where-Object { $_ -match $regex }).Count) {
         throw "NSIS installer does not contain required release file: $name"

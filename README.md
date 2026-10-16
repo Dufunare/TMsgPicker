@@ -9,6 +9,8 @@
 
 这不是 Telegram 官方客户端，也不是功能完整的聊天客户端、Telegram Bot 或 Mini App。不要用它代替 Telegram 官方应用处理全部聊天与账号事务。
 
+**许可证**：本项目采用 [MIT License](LICENSE)（Copyright © 2026 Dufunare）；TDLib、OpenSSL、zlib 及 Microsoft 运行时仍分别遵守各自许可与再分发条款。
+
 **文档导航**：[架构与决策](docs/ARCHITECTURE.md) · [功能与源码文件导览](docs/projects.md) · [开发日志](docs/Devlog.md) · [Windows/TDLib 源码构建](docs/BUILD_WINDOWS.md) · [发布与验收流程](docs/RELEASE.md)
 
 ## 目录
@@ -322,7 +324,7 @@ tdlib/
 8. 媒体访问仍受单账号原生生命周期锁、下载队列、文件大小及内存缓存预算约束；这不是完整的视频、音频或附件管理器。
 9. 当前界面没有批量转发提交入口；部分转发逻辑属于已有但未开放给普通用户的后端能力。
 10. 已有自动化 Mock 回归，但不能据此保证真实 Windows 设备上的全部 FPS、峰值内存、网络及 Telegram 授权场景已被验证。
-11. 仓库当前尚未由权利人选定本项目自身的 `LICENSE`；发布前须明确开源许可，并核对 TDLib、OpenSSL、zlib 和微软 VC++ 运行库的再分发要求。发行构建会附带所用第三方版本及版权声明。
+11. 本项目采用 [MIT License](LICENSE)；发布包将附带应用 MIT 声明与 TDLib、OpenSSL、zlib 的第三方声明。微软 VC++ 运行库的再分发要求、实际 DLL 依赖和干净机验收仍须单独确认。
 
 ## 固定 TDLib 依赖与 Windows 发布
 

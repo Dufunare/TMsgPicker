@@ -65,6 +65,12 @@ foreach ($name in $licenseSources.Keys) {
     if (-not (Test-Path -LiteralPath $src)) { throw "Third-party copyright notice missing: $src" }
     Copy-Item -LiteralPath $src -Destination (Join-Path $licenseDir $name) -Force
 }
+# The application's own MIT copyright notice is a mandatory part of both
+# NSIS and portable distribution, separate from third-party licenses.
+$appLicense = Join-Path $repo 'LICENSE'
+if (-not (Test-Path -LiteralPath $appLicense)) { throw 'Missing application MIT LICENSE' }
+$appLicenseTarget = 'TMsgPicker-MIT.txt'
+Copy-Item -LiteralPath $appLicense -Destination (Join-Path $licenseDir $appLicenseTarget) -Force
 Copy-Item -LiteralPath $manifestFile -Destination (Join-Path $licenseDir 'native-dependencies.json') -Force
 $note = @"
 TMsgPicker Windows native dependency notices
@@ -72,8 +78,9 @@ TDLib $($pin.tdlib.version): $($pin.tdlib.commit)
 OpenSSL: $($pin.native_dependencies.openssl)
 zlib: $($pin.native_dependencies.zlib)
 vcpkg baseline: $($pin.vcpkg.commit)
-The attached notices belong to their respective copyright holders.
-The application itself has a separate licensing decision and copyright.
+TMsgPicker application source and binaries are licensed under the MIT License.
+See TMsgPicker-MIT.txt for copyright, grant, conditions and disclaimer.
+The third-party dependency notices belong to their respective copyright holders.
 "@
 [System.IO.File]::WriteAllText((Join-Path $licenseDir 'NOTICE.txt'), $note, [System.Text.UTF8Encoding]::new($false))
 
@@ -83,7 +90,7 @@ $resources = [ordered]@{}
 foreach ($dll in $runtime) {
     $resources["../native/release/$dll"] = $dll
 }
-foreach ($name in (@($licenseSources.Keys) + @('native-dependencies.json', 'NOTICE.txt'))) {
+foreach ($name in (@($licenseSources.Keys) + @($appLicenseTarget, 'native-dependencies.json', 'NOTICE.txt'))) {
     $resources["../native/release/licenses/$name"] = "licenses/$name"
 }
 $overlay = [ordered]@{

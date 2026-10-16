@@ -46,7 +46,7 @@ try {
     & (Join-Path $root 'scripts\stage-native.ps1')
     $overlay=Get-Content -LiteralPath $generated -Raw | ConvertFrom-Json
     $resourceNames=@($overlay.bundle.resources.PSObject.Properties.Name)
-    foreach($asset in @('tdjson.dll','libssl-3-x64.dll','libcrypto-3-x64.dll','zlib1.dll','licenses/TDLib.txt','licenses/native-dependencies.json')) {
+    foreach($asset in @('tdjson.dll','libssl-3-x64.dll','libcrypto-3-x64.dll','zlib1.dll','licenses/TDLib.txt','licenses/TMsgPicker-MIT.txt','licenses/native-dependencies.json')) {
         $dest=$overlay.bundle.resources.PSObject.Properties.Value | Where-Object { $_ -eq $asset }
         if(-not $dest) { throw "Release resource mapping missing: $asset" }
     }
@@ -56,6 +56,15 @@ try {
     }
     if(-not (Test-Path -LiteralPath (Join-Path $native 'release\licenses\NOTICE.txt'))) {
         throw 'License notice missing from staged release.'
+    }
+    $stagedAppLicense=Join-Path $native 'release\licenses\TMsgPicker-MIT.txt'
+    if(-not (Test-Path -LiteralPath $stagedAppLicense)) {
+        throw 'Application MIT license missing from staged release.'
+    }
+    $originalLicenseHash=(Get-FileHash -LiteralPath (Join-Path $root 'LICENSE') -Algorithm SHA256).Hash
+    $stagedLicenseHash=(Get-FileHash -LiteralPath $stagedAppLicense -Algorithm SHA256).Hash
+    if($originalLicenseHash -ne $stagedLicenseHash){
+        throw 'Application MIT license differs from repository LICENSE.'
     }
 
     # A modified binary must never be accepted by staging using stale provenance.
@@ -68,7 +77,7 @@ try {
         else { throw }
     }
     if(-not $rejected) { throw 'Staging accepted a DLL with an invalid SHA-256.' }
-    Write-Host 'PASS: release config, license staging, binary hash rejection'
+    Write-Host 'PASS: release config, MIT + third-party license staging, binary hash rejection'
 } finally {
     if(Test-Path -LiteralPath $generated) { Remove-Item -LiteralPath $generated -Force }
     if(Test-Path -LiteralPath $native) { Remove-Item -LiteralPath $native -Force -Recurse }
