@@ -26,11 +26,14 @@ export class MediaScheduler {
   private totalCacheChars=0;
   private active=0;
 
-  constructor(
-    private readonly fetchMedia:FetchMedia,
-    private readonly maxGlobal=2,
-    private readonly maxPerProfile=1,
-  ) {}
+  private readonly fetchMedia:FetchMedia;
+  private readonly maxGlobal:number;
+  private readonly maxPerProfile:number;
+  constructor(fetchMedia:FetchMedia,maxGlobal=2,maxPerProfile=1){
+    this.fetchMedia=fetchMedia;
+    this.maxGlobal=maxGlobal;
+    this.maxPerProfile=maxPerProfile;
+  }
 
   request(profileId:string,generation:number,fileId:number,full:boolean,options:MediaOptions={}):Promise<string|null>{
     if(!profileId||!Number.isInteger(generation)||generation<=0||!Number.isInteger(fileId)||fileId<0||options.signal?.aborted)

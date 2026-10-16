@@ -1130,7 +1130,9 @@ fn chat_list_includes_archive_and_supports_scoped_search() {
                 _ => panic!("unexpected TDLib request: {kind}"),
             }
         }
-        fn request_batch(&self, _: Vec<Value>, _: &AtomicBool) -> Result<Vec<Value>> { unreachable!() }
+        fn request_batch(&self, requests:Vec<Value>,cancel:&AtomicBool)->Result<Vec<Value>>{
+            requests.into_iter().map(|v|self.request(v,cancel)).collect()
+        }
     }
     let g = ChatsMock { requests: Mutex::new(vec![]) };
     let all = ChatService::list(&g, "", ChatListScope::All).unwrap();

@@ -13,7 +13,6 @@ pub enum Page {
 pub struct HistoryReader<'a> {
     gateway:&'a dyn TelegramGateway,
     chat:i64,
-    chat_id:String,
     cursor:i64,
     offset:i32,
     anchor_pending:bool,
@@ -46,7 +45,7 @@ impl<'a> HistoryReader<'a> {
                 anchor_pending=true;
             }
         }
-        Ok(Self{gateway,chat,chat_id:chat_id.into(),cursor,offset,anchor_pending,
+        Ok(Self{gateway,chat,cursor,offset,anchor_pending,
             from_head:!anchor_pending,seen:HashSet::new(),stagnant:0,pages:0,raw_messages_read:0})
     }
     pub fn from_head(&self)->bool {self.from_head}
