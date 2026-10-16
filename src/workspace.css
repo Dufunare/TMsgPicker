@@ -130,6 +130,7 @@ button.icon-button:hover:enabled,.icon-button:hover { background:var(--hover); c
 .builder form { display:flex; flex-direction:column; gap:calc(6px * var(--spacing-scale,1)); }
 .builder form > h3 { margin:calc(12px * var(--spacing-scale,1)) 0 4px; }
 .builder form > label { margin:calc(4px * var(--spacing-scale,1)) 0; }
+.builder .scan-all-dates input:focus:not(:focus-visible) { outline:none; }
 .builder .buttons { margin-top:16px; }
 .chat-scope {
   display:flex; align-items:center; gap:4px; padding:8px 10px; min-height:44px; border-bottom:1px solid var(--border-subtle);

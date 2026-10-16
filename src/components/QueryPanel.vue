@@ -9,7 +9,7 @@ const {ready,busy,selectedChat,scopeKind,rawCount,fromDate,toDate,datePostLimit,
 <section class="panel builder"><h2>查询</h2><p v-if="selectedChat" class="muted query-context">{{selectedChat.title}}</p><form @submit.prevent="runQuery">
         <label>扫描范围<AppSelect v-model="scopeKind" :options="[{value:'recent',label:'最近 N 个帖子'},{value:'dates',label:'日期范围'}]" label="扫描范围"/></label>
         <label v-if="scopeKind==='recent'">帖子数量<input v-model.number="rawCount" type="number" min="1" max="100000" required></label>
-        <template v-else><label>开始<AppDateTime v-model="fromDate" label="开始时间"/></label><label>结束<AppDateTime v-model="toDate" label="结束时间"/></label><label>日期范围内最新 N 个帖子<input v-model.number="datePostLimit" type="number" min="1" max="100000" :disabled="scanAllDates" :required="!scanAllDates"></label><label><input v-model="scanAllDates" type="checkbox">扫描日期范围内全部帖子</label></template>
+        <template v-else><label>开始<AppDateTime v-model="fromDate" label="开始时间"/></label><label>结束<AppDateTime v-model="toDate" label="结束时间"/></label><label>日期范围内最新 N 个帖子<input v-model.number="datePostLimit" type="number" min="1" max="100000" :disabled="scanAllDates" :required="!scanAllDates"></label><label class="check scan-all-dates"><input v-model="scanAllDates" type="checkbox">扫描日期范围内全部帖子</label></template>
         <h3>条件</h3><FilterEditor v-model="filter"/>
 
         <label>排序字段<AppSelect v-model="sortField" :options="[['views','浏览'],['forwards','转发'],['comments','评论'],['reaction_total','反应总数'],['reaction','指定 Emoji'],['date','日期']].map(([value,label])=>({value,label}))" label="排序字段"/></label>
