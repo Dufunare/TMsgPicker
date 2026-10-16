@@ -24,12 +24,12 @@ export function createAccountViews() {
   function selectChat(id: string, chat: Chat | null) {
     const view=get(id);
     if(view.selectedChat?.id===chat?.id){view.selectedChat=chat;return null;}
-    const cancelRun=view.scanning?view.currentRun:null;
+    const oldRun=view.currentRun||null;
     view.currentRun='';view.scanChatId='';view.scanning=false;view.result=null;
     view.selected=[];view.confirmation=false;view.confirmedSelection=null;view.preview=null;
     view.error='';
     view.selectedChat=chat;
-    return cancelRun;
+    return oldRun;
   }
   function connection(event: Connection) {
     const id = event.profile_id;

@@ -48,8 +48,9 @@ const search = field('search');
 const chatScope = field('chatScope');
 function selectChatFor(id:string,chat:Chat|null){
   const runId=accountViews.selectChat(id,chat);
-  if(runId)void invokeCommand('cancel_query',{profileId:id,runId}).catch(()=>{
-    // UI ownership has already changed; cancellation is best effort.
+  if(runId)void invokeCommand('release_query',{profileId:id,runId}).catch(()=>{
+    // UI ownership is already invalidated synchronously. Session transitions
+    // will also drop the native result and cancel any active history scan.
   });
 }
 function selectChat(chat:Chat|null){selectChatFor(profileId.value,chat);}

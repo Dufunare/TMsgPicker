@@ -1,4 +1,4 @@
-import {requestMedia} from './mediaRequests.ts';
+import {requestMedia,clearMediaRequests} from './mediaRequests.ts';
 import {reactive} from 'vue';
 
 const MAX_ITEMS=96, TTL=15*60*1000, MAX_ACTIVE=1;
@@ -40,7 +40,7 @@ export async function requestAvatar(profile:string,generation:number,id?:number)
     await slot();
     try{
       if((generations.get(profile)??0)!==revision)return '';
-      const response=await requestMedia(profile,generation,id??0,false);
+      const response=await requestMedia(profile,generation,id??0,false,{priority:'avatar'});
       if((generations.get(profile)??0)!==revision)return '';
       const url=response && /^data:(image\/(jpeg|png|webp|gif)|video\/mp4);base64,/.test(response)?response:'';
       if(url.length>2_850_000)return '';
@@ -63,6 +63,7 @@ export async function requestAvatar(profile:string,generation:number,id?:number)
   return task;
 }
 export function clearAvatars(profile?:string){
+  clearMediaRequests(profile);
   if(!profile) {
     const profiles=new Set([...cache.keys(),...inflight.keys()].map(k=>k.split(':')[0]!));
     for(const id of profiles)generations.set(id,(generations.get(id)??0)+1);

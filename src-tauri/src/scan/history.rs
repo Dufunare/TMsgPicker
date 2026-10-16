@@ -1,5 +1,5 @@
 //! Bounded TDLib history paging with a monotone cursor and global message dedupe.
-use crate::core::{normalize, MessageKey, TelegramMessage};
+use crate::core::{normalize,TelegramMessage};
 use crate::gateway::{id, Result, TelegramGateway};
 use serde_json::json;
 use std::{collections::HashSet,sync::atomic::AtomicBool,time::Duration};
@@ -18,7 +18,9 @@ pub struct HistoryReader<'a> {
     offset:i32,
     anchor_pending:bool,
     from_head:bool,
-    seen:HashSet<MessageKey>,
+    // A history reader scans one chat, so message IDs alone are sufficient.
+    // This avoids storing two heap-allocated strings per scanned raw message.
+    seen:HashSet<i64>,
     stagnant:u8,
     pub pages:usize,
     pub raw_messages_read:usize,
@@ -78,21 +80,25 @@ impl<'a> HistoryReader<'a> {
             let mut next=self.cursor;
             let mut out=Vec::new();
             for v in list.iter().filter(|v|!v.is_null()) {
-                let m=normalize(v)?;
-                if m.key.chat_id!=self.chat_id {
-                    return Err("History returned another chat".into());
-                }
-                let mid=id(&m.key.message_id)?;
-                if self.cursor!=0 && mid>=self.cursor && !was_anchor {
-                    continue;
-                }
+                let mid=v["id"].as_i64()
+                    .or_else(||v["id"].as_str()?.parse().ok())
+                    .filter(|v|*v>0)
+                    .ok_or("History returned an invalid message ID")?;
+                let chat=v["chat_id"].as_i64()
+                    .or_else(||v["chat_id"].as_str()?.parse().ok())
+                    .ok_or("History returned an invalid chat ID")?;
+                if chat!=self.chat {return Err("History returned another chat".into());}
+                if self.cursor!=0 && mid>=self.cursor && !was_anchor {continue;}
                 // For an anchored first window, accept newer messages once;
                 // later requests must move strictly backward.
                 if next==0 || mid<next {next=mid;}
-                if self.seen.insert(m.key.clone()){
-                    out.push(m);
-                    self.raw_messages_read+=1;
-                }
+                // Check before costly normalization; cursor-overlap pages often
+                // repeat messages already parsed on the previous request.
+                if self.seen.contains(&mid){continue;}
+                let m=normalize(v)?;
+                self.seen.insert(mid);
+                out.push(m);
+                self.raw_messages_read+=1;
             }
             if next==0 || (!was_anchor && self.cursor!=0 && next>=self.cursor) {
                 if self.stagnant<2 {

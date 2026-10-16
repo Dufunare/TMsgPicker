@@ -153,7 +153,7 @@ async function workspace(transport:(command:string,args:any)=>Promise<unknown>){
   w.profileId.value='profile';return w;
 }
 
-test('switching during start_query clears synchronously, requests cancellation and ignores a late rejection',async()=>{
+test('switching during start_query clears synchronously, releases native run and ignores a late rejection',async()=>{
   const calls:Array<{command:string;args:any}>=[];
   let rejectStart!:(error:Error)=>void;
   const w=await workspace(async(command,args)=>{
@@ -167,7 +167,7 @@ test('switching during start_query clears synchronously, requests cancellation a
   w.selectChat(chatB);
   assert.equal(w.result.value,null);assert.equal(w.activeResult.value,null);
   assert.equal(w.currentRun.value,'');assert.equal(w.scanning.value,false);
-  assert.deepEqual(calls.find(c=>c.command==='cancel_query')?.args,{profileId:'profile',runId});
+  assert.deepEqual(calls.find(c=>c.command==='release_query')?.args,{profileId:'profile',runId});
   rejectStart(new Error('old A failure'));await pending;
   assert.equal(w.error.value,'');assert.equal(w.result.value,null);
   await w.openPost(post);

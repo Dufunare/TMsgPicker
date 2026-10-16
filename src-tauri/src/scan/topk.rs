@@ -47,11 +47,12 @@ impl TopPosts {
     }
     pub fn matched(&self)->usize{self.matched}
     pub fn len(&self)->usize{self.heap.len()}
+    pub fn is_empty(&self)->bool{self.heap.is_empty()}
     /// Clone only the small, retained ranking. Running updates can send fewer
     /// Posts than the final snapshot without changing matched/count semantics.
     pub fn snapshot(&self,max_items:usize)->Vec<LogicalPost> {
         let mut refs:Vec<_>=self.heap.iter().collect();
-        refs.sort_unstable_by(|a,b|a.cmp(b));
+        refs.sort_unstable();
         refs.into_iter().take(max_items).map(|item|item.post.clone()).collect()
     }
 }

@@ -340,6 +340,21 @@ fn selection(s: &AccountRuntime, run_id: &str, post_keys: &[String], allow_incom
     }
     Ok(keys)
 }
+/// Invalidate one run and release its retained ranking without touching the
+/// TDLib Session or any send receipts. Lock order matches start_query/publish:
+/// active first, then results, so a late event cannot resurrect freed Posts.
+fn release_result(s:&AccountRuntime,run_id:&str){
+    let mut active=s.active.lock().unwrap();
+    if active.as_ref().is_some_and(|(id,_)|id==run_id)
+        && let Some((_,cancel))=active.take()
+    {
+        cancel.store(true,Ordering::Relaxed);
+    }
+    let mut results=s.results.lock().unwrap();
+    if results.as_ref().is_some_and(|result|result.run_id==run_id){
+        *results=None;
+    }
+}
 fn retain_result(s: &AccountRuntime, result: &ScanResult, epoch: u64) -> bool {
     let active = s.active.lock().unwrap();
     if !current_epoch(s, epoch) || active.as_ref().map(|(id, _)| id) != Some(&result.run_id) {
@@ -1775,6 +1790,40 @@ mod tests {
         assert!(!retain_result(&s, &current, 0));
         assert!(retain_result(&s, &current, 1));
     }
+    #[test]
+    fn release_result_frees_only_the_matching_run_and_rejects_late_progress() {
+        let s=AccountRuntime::default();
+        let cancel=Arc::new(AtomicBool::new(false));
+        *s.active.lock().unwrap()=Some(("old-run".into(),cancel.clone()));
+        let old=ScanResult {
+            run_id:"old-run".into(),status:core::ScanStatus::Complete,
+            stop_reason:Some(core::StopReason::PostLimitReached),
+            scope:core::Scope::Recent{count:1},
+            coverage:core::ScanCoverage{scope_complete:true,..Default::default()},
+            stats:core::ScanStats::default(),
+            scanned:1,pages:1,exact:true,detail:String::new(),posts:vec![],
+        };
+        assert!(retain_result(&s,&old,0));
+        release_result(&s,"other-run");
+        assert!(!cancel.load(Ordering::Relaxed));
+        assert_eq!(s.results.lock().unwrap().as_ref().unwrap().run_id,"old-run");
+        release_result(&s,"old-run");
+        assert!(cancel.load(Ordering::Relaxed));
+        assert!(s.active.lock().unwrap().is_none());
+        assert!(s.results.lock().unwrap().is_none());
+        assert!(!retain_result(&s,&old,0));
+        let newer=ScanResult{run_id:"new-run".into(),..old};
+        *s.active.lock().unwrap()=Some(("new-run".into(),Arc::new(AtomicBool::new(false))));
+        assert!(retain_result(&s,&newer,0));
+        release_result(&s,"old-run");
+        assert_eq!(s.results.lock().unwrap().as_ref().unwrap().run_id,"new-run");
+    }
+}
+#[tauri::command]
+fn release_query(global: State<AppState>, profile_id: String, run_id: String) -> Result<()> {
+    let s=account(&global,&profile_id)?;
+    if !run_id.is_empty(){release_result(&s,&run_id);}
+    Ok(())
 }
 #[tauri::command]
 fn cancel_query(global: State<AppState>, profile_id: String, run_id: String) -> Result<()> {
@@ -2333,6 +2382,7 @@ pub fn run() {
             saved_messages,
             start_query,
             cancel_query,
+            release_query,
             message_link,
             preview_forward,
             forward_selected
