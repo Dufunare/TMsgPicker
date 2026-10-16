@@ -3,8 +3,18 @@ export interface Reaction { key: { kind: 'emoji' | 'custom_emoji' | 'paid' | 'un
 export interface Metrics { views: number | null; forwards: number | null; reply_info: number | null; reactions: Reaction[] | null }
 export interface TextLink { offset: number; length: number; url: string }
 export interface Message { key: MessageKey; date: number; content_kind: string; text: string; links?: TextLink[]; media_album_id: string | null; thumbnail_file_id?: number|null; full_file_id?:number|null; minithumbnail?:string|null; metrics: Metrics }
-export interface Post { key: string; kind: 'single' | 'album'; members: Message[]; representative: MessageKey; date: number; text: string; links?: TextLink[]; metrics: Metrics; provenance: Record<string, string>; partial: boolean }
-export interface ScanResult { run_id: string; status: 'Scanning' | 'Partial' | 'Complete' | 'Cancelled' | 'Error'; scanned: number; pages: number; exact: boolean; detail: string; posts: Post[] }
+export type PostCompletenessLevel = 'Verified' | 'Assumed' | 'Truncated' | 'Unknown';
+export interface PostCompleteness {level: PostCompletenessLevel; reason: string}
+export interface Post { key: string; kind: 'single' | 'album'; members: Message[]; representative: MessageKey; date: number; text: string; links?: TextLink[]; metrics: Metrics; provenance: Record<string, string>; completeness: PostCompleteness }
+export type ScanStatus = 'Running'|'Complete'|'BudgetExceeded'|'Interrupted'|'Error';
+export type StopReason = 'PostLimitReached'|'DateLowerBoundReached'|'HistoryExhausted'|'UserCancelled'|'CursorStalled'|'ResourceLimitReached'|'GatewayFailure';
+export type ScanScope = {kind:'recent'; count:number} | {kind:'dates'; from:number; to:number; limit_posts:number|null};
+export interface ScanResult {
+  run_id:string; status:ScanStatus; stop_reason:StopReason|null; detail:string; scope:ScanScope;
+  coverage:{requested_posts:number|null; examined_posts:number; scope_complete:boolean; date_window_exhausted:boolean|null};
+  stats:{raw_messages_read:number; posts_finalized:number; posts_matched:number; posts_returned:number; pages:number};
+  scanned:number; pages:number; exact:boolean; posts:Post[];
+}
 export interface Chat { id: string; title: string; kind: string; archived?: boolean; photo_file_id?: number|null; photo_big_file_id?: number|null; photo_minithumbnail?: string|null }
 export type ChatScope = 'all' | 'main' | 'archive';
 export interface Connection { profile_id: string | null; generation: number; runtime_state: string; auth_state: string; connection_state: string; detail: string; user_disconnected: boolean }
@@ -12,7 +22,7 @@ export type FieldName = 'views' | 'forwards' | 'comments' | 'reply_info' | 'reac
 export interface Field { kind: FieldName; emoji?: string }
 export type CompareOp = 'eq' | 'ne' | 'gt' | 'ge' | 'lt' | 'le';
 export type Filter = { kind: 'compare'; field: Field; op: CompareOp; value: number | string } | { kind: 'is_null' | 'is_not_null'; field: Field } | { kind: 'contains_content'; content_kind: string; exists: boolean } | { kind: 'and' | 'or'; items: Filter[] } | { kind: 'not'; item: Filter };
-export interface QuerySpec { version: 1; chat_id: string; scope: { kind: 'recent'; count: number } | { kind: 'dates'; from: number; to: number; budget: number }; filter: Filter; sort: { field: Field; descending: boolean }[]; output_limit: number }
+export interface QuerySpec { version: 2; chat_id: string; scope: ScanScope; filter: Filter; sort: { field: Field; descending: boolean }[]; output_limit: number }
 export interface ActionItem { source: MessageKey; state: string; detail: string; sent_id: string | null }
 export interface ForwardReport { items: ActionItem[] }
 export interface UnknownSend { profile_id: string; generation: number; target: string; old_message_id: string; state: string }

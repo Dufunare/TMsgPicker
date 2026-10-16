@@ -50,10 +50,10 @@ SOCKS5 服务器填写主机（如 `127.0.0.1`），端口使用实际 SOCKS5/Mi
 ## 查询语义
 
 - 所有 Telegram ID 通过字符串 DTO 传给 TypeScript，包括 Album 和 custom emoji int64。日期使用 UTC Unix 秒，界面日期范围输入按本地时间转换；区间为 `[开始,结束)`。
-- 最近 N 条指原始消息；结果上限指筛选后的逻辑帖子。短页不会终止扫描；排除重复游标、持续向旧消息推进。空页结束，无进展为 Partial，网络/限流错误为 Error，取消为 Cancelled，保留已取得候选。
+- **QuerySpec V2：最近 N 条和日期范围内最新 N 条均以 LogicalPost 计数**；日期范围还支持扫描该日期窗口内全部 Post。扫描范围在筛选前确定，输出数量限制只作用于匹配且排序后的 Post。短页不结束扫描；游标无进展/取消记 Interrupted，资源上限记 BudgetExceeded，网络/解析错误记 Error。
 - 单字段未知值显示 `—`，与 0 不同。数字比较未知值返回 Unknown，NOT(Unknown) 仍为 Unknown，只选择 True。反应对象存在但缺少某个 Emoji 视为 0；整个反应对象缺失视为未知。
-- Album 按 `(chat_id, media_album_id != 0)` 分组，跨页合并。每个指标取日期/ID 最早且该字段有效的成员，并记录来源；不累加浏览、转发、评论或反应。
-- TDLib 消息没有媒体组总成员数，本版对 **所有 Album 保守标记成员完整性未知**，含 Album 的查询最终为 Partial，不标 Exact。这不会阻止浏览和手动选择已扫描成员，但转发仅覆盖明确列出的成员。Single 查询完整扫描 Scope 后可为 Complete/Exact；Exact 只针对当前 Scope 和读取时指标快照。
+- Album 按 `(chat_id, media_album_id != 0)` 分组并在跨页扫描时合并；Post.date 取成员中最新发送时间。浏览/转发取组内最大有效值；评论/反应来自确定的 caption 主成员；每个指标记录来源，不将组内指标累加。
+- **扫描覆盖状态与 Post 成员完整性独立**：ScanStatus 为 Running / Complete / BudgetExceeded / Interrupted / Error；单 Post 为 Verified / Assumed / Truncated / Unknown。Album 连续边界可推定 Assumed，但 TDLib 不提供总成员数，不能严格称 Verified。Unknown/Truncated 在转发预览与提交时必须额外明确确认，后端默认拒绝。详情见 [Post Scan V2 设计](docs/POST_SCAN_V2.md)。
 - 升/降序均为空值最后；同指标按 date、数值 chat ID、数值 message ID 确定顺序。排序最多支持 10 个字段，UI 首版编辑一个字段。
 - 「排除疑似推广」是可编辑的 `NOT (reply_info IS NULL AND post_kind = single)` 查询预设，可能误判，仅适合用户观察到该结构规律的频道。
 
@@ -61,7 +61,7 @@ SOCKS5 服务器填写主机（如 `127.0.0.1`），端口使用实际 SOCKS5/Mi
 
 打开原文先查 `getMessageProperties.can_get_link`，再请求 TDLib `getMessageLink`；Album 使用 `for_album=true`。不自行生成私密消息链接。
 
-选中帖子 → 选择目标或解析 Saved Messages → 准备转发 → 查看逐条权限预检 → 明确确认。后端重新验证源消息转发能力和目标成员/发帖/媒体权限。按源聊天分组，成员 ID 去重后严格升序，每批最多 100，使用正常转发，不复制绕过保护。Album 的动作范围是卡片中已扫描的所有成员。
+选中帖子 → 选择目标或解析 Saved Messages → 准备转发 → 查看逐条权限预检 → 明确确认。Unknown/Truncated Post 需额外确认，后端独立校验；后端重新验证源消息转发能力和目标成员/发帖/媒体权限。按源聊天分组，成员 ID 去重后严格升序，每批最多 100，使用正常转发，不复制绕过保护。Album 的动作范围是卡片中已扫描的所有成员。
 
 结果逐条区分 Rejected、Failed、Pending、Sent。返回 `null` 或缺项计为 Failed；`messageSendingStatePending` 仅为 Pending，`updateMessageSendSucceeded` / `updateMessageSendFailed` 更新最终状态。断开、退出或修改全局设置时，若发送至少 30 秒仍无回执，可由用户明确确认安全关闭，并将这些发送标为 **Unknown（结果未知）**。取消不关闭账号；确认只使用 close，不注销。Unknown 可能已送达，请先在 Telegram 核对，避免重复发送。记录按账号保留，在本进程断开／重建后仍可查看，退出后不持久化；不会自动重发。
 

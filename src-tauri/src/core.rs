@@ -2,12 +2,11 @@ use crate::formatted_text::extract_text_links;
 pub use crate::formatted_text::TextLink;
 use crate::gateway::{Result, TelegramGateway, id};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 use std::{
     cmp::Ordering,
-    collections::{BTreeMap, HashSet},
-    sync::atomic::{AtomicBool, Ordering as AtomicOrdering},
-    time::{Duration, Instant},
+    collections::BTreeMap,
+    sync::atomic::AtomicBool,
 };
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -178,6 +177,14 @@ pub enum PostKind {
     Single,
     Album,
 }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all="PascalCase")]
+pub enum CompletenessLevel { Verified, Assumed, Truncated, Unknown }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PostCompleteness {
+    pub level: CompletenessLevel,
+    pub reason: String,
+}
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LogicalPost {
     pub key: String,
@@ -190,9 +197,10 @@ pub struct LogicalPost {
     pub links: Vec<TextLink>,
     pub metrics: InteractionMetrics,
     pub provenance: BTreeMap<String, String>,
-    pub partial: bool,
+    pub completeness: PostCompleteness,
 }
-/// Every album is conservatively Partial: TDLib doesn't supply a total member count.
+/// Pure grouping from an arbitrary batch: without boundary evidence, Albums
+/// are Unknown. Only the streaming boundary resolver may promote to Assumed.
 pub fn assemble(messages: &[TelegramMessage]) -> Vec<LogicalPost> {
     let mut groups: BTreeMap<String, Vec<TelegramMessage>> = BTreeMap::new();
     for m in messages {
@@ -241,12 +249,15 @@ pub fn assemble(messages: &[TelegramMessage]) -> Vec<LogicalPost> {
                     PostKind::Single
                 },
                 representative: primary.key.clone(),
-                date: primary.date,
+                date: members.iter().map(|m|m.date).max().unwrap_or(primary.date),
                 text: primary.text.clone(),
                 links: primary.links.clone(),
                 metrics,
                 provenance,
-                partial: album,
+                completeness: PostCompleteness {
+                    level:if album {CompletenessLevel::Unknown} else {CompletenessLevel::Verified},
+                    reason:if album {"unverified_membership".into()} else {"single_message".into()},
+                },
                 members,
             }
         })
@@ -434,10 +445,10 @@ fn validate_filter(f: &FilterExpr, depth: usize) -> Result<()> {
     Ok(())
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
+#[serde(tag = "kind", rename_all = "snake_case",deny_unknown_fields)]
 pub enum Scope {
     Recent { count: usize },
-    Dates { from: i64, to: i64, budget: usize },
+    Dates { from: i64, to: i64, limit_posts: Option<usize> },
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SortSpec {
@@ -456,32 +467,30 @@ pub struct QuerySpec {
 impl QuerySpec {
     pub fn validate(&self) -> Result<()> {
         id(&self.chat_id)?;
-        if self.version != 1
-            || self.output_limit == 0
-            || self.output_limit > 1000
+        if self.version != 2
+            || self.output_limit == 0 || self.output_limit > 1000
             || self.sort.len() > 10
-        {
-            return Err("Invalid query version or output limit (1–1000)".into());
-        }
-        let budget = match self.scope {
-            Scope::Recent { count } => count,
-            Scope::Dates { from, to, budget } => {
-                if from >= to {
-                    return Err("Date range must be [from,to)".into());
-                }
-                budget
+        {return Err("QuerySpec V2 requires version 2 and output limit 1–1000".into());}
+        let requested=match &self.scope {
+            Scope::Recent{count}=>Some(*count),
+            Scope::Dates{from,to,limit_posts}=>{
+                if from>=to{return Err("Date range must be [from,to)".into());}
+                *limit_posts
             }
         };
-        if budget == 0 || budget > 100_000 {
-            return Err("Scan budget must be 1–100000".into());
+        if requested.is_some_and(|n|n==0||n>100_000) {
+            return Err("Post count must be 1–100000".into());
         }
-        validate_filter(&self.filter, 0)
+        validate_filter(&self.filter,0)
     }
 }
 pub fn query(messages: &[TelegramMessage], spec: &QuerySpec) -> Vec<LogicalPost> {
-    let mut posts: Vec<_> = assemble(messages)
-        .into_iter()
+    query_posts(&assemble(messages),spec)
+}
+pub fn query_posts(input:&[LogicalPost],spec:&QuerySpec)->Vec<LogicalPost> {
+    let mut posts: Vec<_> = input.iter()
         .filter(|p| evaluate(p, &spec.filter) == Truth::True)
+        .cloned()
         .collect();
     posts.sort_by(|a, b| {
         for s in &spec.sort {
@@ -512,205 +521,50 @@ pub fn query(messages: &[TelegramMessage], spec: &QuerySpec) -> Vec<LogicalPost>
     posts.truncate(spec.output_limit);
     posts
 }
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
-pub enum ScanStatus {
-    Scanning,
-    Partial,
-    Complete,
-    Cancelled,
-    Error,
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub enum ScanStatus { Running, Complete, BudgetExceeded, Interrupted, Error }
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all="PascalCase")]
+pub enum StopReason {
+    PostLimitReached, DateLowerBoundReached, HistoryExhausted,
+    UserCancelled, CursorStalled, ResourceLimitReached, GatewayFailure,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ScanCoverage {
+    pub requested_posts:Option<usize>,
+    pub examined_posts:usize,
+    pub scope_complete:bool,
+    pub date_window_exhausted:Option<bool>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct ScanStats {
+    pub raw_messages_read:usize,
+    pub posts_finalized:usize,
+    pub posts_matched:usize,
+    pub posts_returned:usize,
+    pub pages:usize,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ScanResult {
-    pub run_id: String,
-    pub status: ScanStatus,
-    pub scanned: usize,
-    pub pages: usize,
-    pub exact: bool,
-    pub detail: String,
-    pub posts: Vec<LogicalPost>,
+    pub run_id:String,
+    pub status:ScanStatus,
+    pub stop_reason:Option<StopReason>,
+    pub detail:String,
+    pub scope:Scope,
+    pub coverage:ScanCoverage,
+    pub stats:ScanStats,
+    // Compatibility-only transport counters; prefer coverage + stats in the UI.
+    pub scanned:usize,
+    pub pages:usize,
+    pub exact:bool,
+    pub posts:Vec<LogicalPost>,
 }
 pub fn scan(
-    gateway: &dyn TelegramGateway,
-    spec: &QuerySpec,
-    run_id: String,
-    cancel: &AtomicBool,
-    mut progress: impl FnMut(ScanResult),
-) -> Result<ScanResult> {
-    spec.validate()?;
-    let chat = id(&spec.chat_id)?;
-    // A recent count is a number of logical posts: a media album is one post.
-    // A separate, bounded raw-message guard allows completing an album at N.
-    let recent_target = match spec.scope {
-        Scope::Recent { count } => Some(count),
-        Scope::Dates { .. } => None,
-    };
-    let budget = match spec.scope {
-        Scope::Recent { count } => count.saturating_mul(10).saturating_add(32).min(100_000),
-        Scope::Dates { budget, .. } => budget,
-    };
-    let mut logical_seen = HashSet::new();
-    let mut seen = HashSet::new();
-    let mut collected = Vec::new();
-    let mut cursor = 0_i64;
-    let mut pages = 0;
-    let mut scanned = 0;
-    let mut status = ScanStatus::Partial;
-    let mut detail = "Scan budget reached".to_string();
-    // Rebuilding and serializing all candidates on every page is quadratic for large scans.
-    let mut last_progress: Option<Instant> = None;
-    // TDLib may temporarily return only the inclusive cursor while loading older history.
-    let mut stagnant_pages = 0_u8;
-    while scanned < budget {
-        if cancel.load(AtomicOrdering::Relaxed) {
-            status = ScanStatus::Cancelled;
-            detail = "Cancelled by user".into();
-            break;
-        }
-        // Reserve a slot for the inclusive cursor so a remaining budget of 1 can progress.
-        let needed = match recent_target {
-            Some(n) if logical_seen.len() >= n => 12, // finish the final media group
-            Some(n) => n - logical_seen.len(),
-            None => budget - scanned,
-        };
-        let page_limit = (needed + usize::from(cursor != 0))
-            .min(budget - scanned + usize::from(cursor != 0))
-            .clamp(1, 100);
-        let response=match gateway.request(json!({"@type":"getChatHistory","chat_id":chat,"from_message_id":cursor,"offset":0,"limit":page_limit,"only_local":false}),cancel) {
-            Ok(v)=>v,Err(e)=>{status=if cancel.load(AtomicOrdering::Relaxed) {ScanStatus::Cancelled} else {ScanStatus::Error};detail=e;break;}
-        };
-        pages += 1;
-        let Some(list) = response["messages"].as_array() else {
-            status = ScanStatus::Error;
-            detail = "Invalid history response".into();
-            break;
-        };
-        if list.is_empty() {
-            status = ScanStatus::Complete;
-            detail = "History exhausted".into();
-            break;
-        }
-        let mut next = cursor;
-        let mut reached = false;
-        for raw in list.iter().filter(|v| !v.is_null()) {
-            let m = match normalize(raw) {
-                Ok(m) => m,
-                Err(e) => {
-                    status = ScanStatus::Error;
-                    detail = e;
-                    reached = true;
-                    break;
-                }
-            };
-            if m.key.chat_id != spec.chat_id {
-                status = ScanStatus::Error;
-                detail = "History returned another chat".into();
-                reached = true;
-                break;
-            }
-            let mid = id(&m.key.message_id)?;
-            if cursor != 0 && mid >= cursor {
-                continue;
-            }
-            if next == 0 || mid < next {
-                next = mid;
-            }
-            if seen.contains(&m.key) { continue; }
-            if let Some(target) = recent_target {
-                let group_key = m.media_album_id.as_ref()
-                    .map(|album| format!("{}:a{album}", m.key.chat_id))
-                    .unwrap_or_else(|| format!("{}:m{}", m.key.chat_id, m.key.message_id));
-                if !logical_seen.contains(&group_key) && logical_seen.len() >= target {
-                    status = ScanStatus::Complete;
-                    detail = "Recent logical-post boundary reached".into();
-                    reached = true;
-                    break;
-                }
-                logical_seen.insert(group_key);
-            }
-            seen.insert(m.key.clone());
-            scanned += 1;
-            if let Scope::Dates { from, to, .. } = spec.scope {
-                if m.date < from {
-                    status = ScanStatus::Complete;
-                    detail = "Date lower boundary reached".into();
-                    reached = true;
-                    break;
-                }
-                if m.date >= to {
-                    if scanned >= budget {
-                        break;
-                    }
-                    continue;
-                }
-            }
-            let finishes_single = m.media_album_id.is_none();
-            collected.push(m);
-            if let Some(target) = recent_target
-                && logical_seen.len() == target && finishes_single {
-                status = ScanStatus::Complete;
-                detail = "Recent logical-post scope complete".into();
-                reached = true;
-                break;
-            }
-            if scanned >= budget {
-                if recent_target.is_some() {
-                    status = ScanStatus::Partial;
-                    detail = "Recent logical-post raw-message safety limit reached".into();
-                }
-                break;
-            }
-        }
-        if reached || scanned >= budget {
-            break;
-        }
-        if next == 0 || (cursor != 0 && next >= cursor) {
-            // A short TDLib history page can contain just the inclusive cursor.
-            // Retry briefly rather than declaring the scan incomplete immediately.
-            // Remain bounded if history never advances.
-            if cursor != 0 && stagnant_pages < 2 {
-                stagnant_pages += 1;
-                std::thread::sleep(Duration::from_millis(120));
-                continue;
-            }
-            status = ScanStatus::Partial;
-            detail = "History cursor made no progress after retries".into();
-            break;
-        }
-        stagnant_pages = 0;
-        cursor = next;
-        // Publish promptly after the first page, then at most twice per second.
-        // The final result is always sent by the caller regardless of throttling.
-        if last_progress.is_none_or(|at| at.elapsed() >= Duration::from_millis(500)) {
-            last_progress = Some(Instant::now());
-            progress(ScanResult {
-                run_id: run_id.clone(),
-                status: ScanStatus::Scanning,
-                scanned,
-                pages,
-                exact: false,
-                detail: "Scanning; ranking is provisional".into(),
-                posts: query(&collected, spec),
-            });
-        }
-    }
-    if cancel.load(AtomicOrdering::Relaxed) {
-        status = ScanStatus::Cancelled;
-        detail = "Cancelled by user".into();
-    }
-    let posts = query(&collected, spec);
-    let exact = status == ScanStatus::Complete && !assemble(&collected).iter().any(|p| p.partial);
-    if status == ScanStatus::Complete && !exact {
-        status = ScanStatus::Partial;
-        detail.push_str("; album membership cannot be certified complete");
-    }
-    Ok(ScanResult {
-        run_id,
-        status,
-        scanned,
-        pages,
-        exact,
-        detail,
-        posts,
-    })
+    gateway:&dyn TelegramGateway,
+    spec:&QuerySpec,
+    run_id:String,
+    cancel:&AtomicBool,
+    progress:impl FnMut(ScanResult),
+)->Result<ScanResult> {
+    crate::scan::scan(gateway,spec,run_id,cancel,progress)
 }
