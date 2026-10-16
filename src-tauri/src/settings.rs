@@ -1348,6 +1348,23 @@ mod tests {
         );
         let previous = storage_bytes(&root);
         store.select(&b).unwrap();
+        for tab in ["application", "account", "appearance"] {
+            let target = crate::settings_target::SettingsTarget::resolve(
+                Some(tab),
+                Some(b.clone()),
+                |id| store.select(id),
+            )
+            .unwrap();
+            assert_eq!(target.profile_id.as_deref(), Some(b.as_str()));
+        }
+        assert!(
+            crate::settings_target::SettingsTarget::resolve(
+                Some("account"),
+                Some("deleted-B".into()),
+                |id| store.select(id),
+            )
+            .is_err()
+        );
         assert_eq!(storage_bytes(&root), previous); // Viewing B cannot change primary or storage.
         assert_eq!(
             store.snapshot().primary_profile_id.as_deref(),

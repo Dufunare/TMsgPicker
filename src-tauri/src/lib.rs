@@ -12,3 +12,4 @@ mod managed_data;
 #[cfg(any(debug_assertions, test))]
 pub mod reset;
 pub mod settings;
+pub mod settings_target;

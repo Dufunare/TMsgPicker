@@ -1,5 +1,6 @@
 use crate::services::ChatListScope;
 use crate::settings::{AppearancePreferences, Settings, Snapshot, Store};
+use crate::settings_target::SettingsTarget;
 use crate::{
     core::{self, MessageKey, QuerySpec, ScanResult},
     gateway::{Result, SessionLifecycle, TelegramGateway},
@@ -69,19 +70,6 @@ struct PendingLogin {
     phone_submitting: bool,
     remember_database: bool,
     newly_created: bool,
-}
-#[derive(Clone, Serialize)]
-struct SettingsTarget {
-    tab: &'static str,
-    profile_id: Option<String>,
-}
-impl Default for SettingsTarget {
-    fn default() -> Self {
-        Self {
-            tab: "application",
-            profile_id: None,
-        }
-    }
 }
 #[derive(Default)]
 struct TdlibRuntimeManager {
@@ -590,7 +578,11 @@ fn open_auxiliary(app: &tauri::AppHandle, label: &str, url: &str, title: &str) -
     Ok(())
 }
 #[tauri::command]
-async fn open_settings(app: tauri::AppHandle, profile_id: Option<String>) -> Result<()> {
+async fn open_settings(
+    app: tauri::AppHandle,
+    tab: Option<String>,
+    profile_id: Option<String>,
+) -> Result<()> {
     background(move || {
         let s = app.state::<AppState>();
         let _gate = s
@@ -604,17 +596,9 @@ async fn open_settings(app: tauri::AppHandle, profile_id: Option<String>) -> Res
             return Err("本地重置清理未完成，请重试 Debug 重置".into());
         }
         let _window_lock = s.settings_window.lock().unwrap();
-        if let Some(id) = &profile_id {
-            with_store(&s, |store| store.select(id))?;
-        }
-        let target = SettingsTarget {
-            tab: if profile_id.is_some() {
-                "account"
-            } else {
-                "application"
-            },
-            profile_id,
-        };
+        let target = SettingsTarget::resolve(tab.as_deref(), profile_id, |id| {
+            with_store(&s, |store| store.select(id))
+        })?;
         *s.settings_target.lock().unwrap() = target.clone();
         open_auxiliary(&app, "settings", "index.html?view=settings", "设置")?;
         if let Some(window) = app.get_webview_window("settings") {
@@ -1423,6 +1407,23 @@ fn start_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn account_operations_reject_missing_targets_without_using_another_runtime() {
+        let global = AppState::default();
+        let a = test_account("A", Duration::ZERO);
+        global
+            .manager
+            .accounts
+            .lock()
+            .unwrap()
+            .insert("A".into(), a.clone());
+        for id in ["", "B"] {
+            assert!(account(&global, id).is_err());
+        }
+        assert!(Arc::ptr_eq(&account(&global, "A").unwrap(), &a));
+        assert_eq!(a.pending.lock().unwrap().len(), 1);
+        assert!(!a.user_disconnected.load(Ordering::SeqCst));
+    }
     fn test_account(id: &str, age: Duration) -> Arc<AccountRuntime> {
         let s = Arc::new(AccountRuntime {
             profile_id: id.into(),

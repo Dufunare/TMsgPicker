@@ -12,9 +12,9 @@ const {tab,navigate}=useSettingsNavigation(workspace);
 <template>
 <main class="settings-page">
   <nav class="settings-tabs segmented-tabs" :style="{'--segment-index':tab==='application'?0:tab==='account'?1:2}" aria-label="设置子页面">
-    <button :aria-pressed="tab==='application'" :disabled="workspace.busy.value||workspace.resetBusy.value" @click="navigate({tab:'application',profile_id:null})">应用设置</button>
-    <button :aria-pressed="tab==='account'" :disabled="workspace.busy.value||workspace.resetBusy.value" @click="navigate({tab:'account',profile_id:workspace.profileId.value||null})">账号设置</button>
-    <button :aria-pressed="tab==='appearance'" :disabled="workspace.busy.value||workspace.resetBusy.value" @click="navigate({tab:'appearance',profile_id:null})">外观设置</button>
+    <button :aria-pressed="tab==='application'" :disabled="workspace.busy.value||workspace.resetBusy.value||!workspace.settingsTargetReady.value" @click="navigate({tab:'application'})">应用设置</button>
+    <button :aria-pressed="tab==='account'" :disabled="workspace.busy.value||workspace.resetBusy.value||!workspace.settingsTargetReady.value" @click="navigate({tab:'account'})">账号设置</button>
+    <button :aria-pressed="tab==='appearance'" :disabled="workspace.busy.value||workspace.resetBusy.value||!workspace.settingsTargetReady.value" @click="navigate({tab:'appearance'})">外观设置</button>
   </nav>
   <!-- Keep every settings view mounted, so unsaved inputs and scroll positions survive switches. -->
   <div class="settings-panels">
