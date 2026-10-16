@@ -20,7 +20,7 @@ TMsgPicker 是 **本地优先的专用 Telegram 历史消息客户端**。目标
 | 外观与栏宽 | 外观全局保存；栏宽仅当前窗口内存 | 避免无意义持久化，减少 UI 偏好与 Session 耦合 |
 | 发送安全 | 预检、用户确认、发送回执／Pending／Unknown | 不能把“请求提交成功”误报为真正送达 |
 | 媒体 | TDLib 文件校验、受限 Base64 IPC、账号级缓存与并发调度 | 较易控制路径权限，但大图仍会产生 IPC/内存成本 |
-| 发布 | Windows x64，固定 TDLib 源码 + NSIS/Portable ZIP + Draft Release CI | 支持可审计的原生依赖构建与自动打包；干净机实测、正式公开发布、签名仍需人工验收 |
+| 发布 | Windows x64，MIT 许可证 + 固定 TDLib 源码 + NSIS/Portable ZIP + Draft Release CI | 支持可审计的原生依赖构建与自动打包；干净机实测、正式公开发布、签名仍需人工验收 |
 
 ## 2. 分层与数据流
 

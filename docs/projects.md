@@ -264,7 +264,7 @@ ApplicationSettings / AccountSettings / AppearanceSettings
 |---|---|
 | `scripts/native-versions.json` | **TDLib 1.8.68（2026-10-12）**、固定 TDLib SHA、vcpkg SHA 及 OpenSSL/zlib/gperf port 修订号 |
 | `scripts/build-tdlib.ps1` | 从完整 SHA 检出 TDLib/vcpkg，检查 port 版本，调用 vcpkg 和 VS2022 CMake，生成 `tdjson.lib/dll`、依赖 DLL、SHA-256 manifest |
-| `scripts/stage-native.ps1` | 检查固定构建产物哈希，复制实际版权声明，生成 Tauri Release-only `tauri.release.generated.json` |
+| `scripts/stage-native.ps1` | 检查固定构建产物哈希，复制项目 MIT LICENSE 和第三方版权声明，生成 Tauri Release-only `tauri.release.generated.json` |
 | `tests/releaseStaging.ps1` | Mock 原生依赖文件、manifest 和许可证，离线验证 Release staging/Tauri overlay 及文件哈希拒绝逻辑（不加载真实 TDLib） |
 | `scripts/audit-pe-imports.ps1` | 用 MSVC dumpbin 验证免安装目录 EXE/DLL 的 PE 导入依赖是否由分发文件或系统库提供 |
 | `scripts/package-release.ps1` | 检查 NSIS 包内容、组装含运行时和许可声明的 Portable ZIP、SHA256SUMS |

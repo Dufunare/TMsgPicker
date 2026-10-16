@@ -54,7 +54,7 @@ cd TMsgPicker
 4. Bootstrap 固定 vcpkg，安装 `openssl:x64-windows`、`zlib:x64-windows`、`gperf:x64-windows`；
 5. 用 Visual Studio 2022/CMake 配置 `x64`、Release，执行 `cmake --build ... --target tdjson --config Release`；将输出 `tdjson.lib`、`tdjson.dll` 和 vcpkg 的 OpenSSL/zlib DLL 汇集到 `native/tdlib/`；
 6. 计算各文件 SHA-256，在 `native/tdlib/build-manifest.json` 记录准确版本/上游提交与原生文件哈希；
-7. `stage-native.ps1` 重新核对 manifest 和文件哈希，复制运行库、TDLib/OpenSSL/zlib 的**实际许可声明**到 `native/release/`，生成临时 `src-tauri/tauri.release.generated.json`；
+7. `stage-native.ps1` 重新核对 manifest 和文件哈希，复制运行库、**根目录 MIT LICENSE** 及 TDLib/OpenSSL/zlib 的实际许可声明到 `native/release/`，生成临时 `src-tauri/tauri.release.generated.json`；
 8. Release-only Tauri 配置将运行 DLL 映射到安装目录中 **`tmsgpicker.exe` 的同级**，不把它们埋在无法被 Windows loader 自动找到的资源子目录。
 
 没有将可变的 `master`、`main`、`latest` 作为源码 pin；升级依赖应通过独立 PR 修改版本文件并验证实际产物。
@@ -76,6 +76,7 @@ native/
 ├── release/
 │   ├── 运行 DLL
 │   └── licenses/
+│       ├── TMsgPicker-MIT.txt         项目 MIT 许可证
 │       ├── TDLib.txt
 │       ├── OpenSSL.txt
 │       ├── zlib.txt

@@ -81,7 +81,7 @@ git tag -a v0.1.0 -m "TMsgPicker v0.1.0 preview"
 git push origin v0.1.0
 ```
 
-**不要重复使用已有的发布标签**，也不要为了“修复包”直接修改同一标签指向：审计和校验和需要不可变的 Release source ref。修复请创建新的 patch 版本/标签。若没有 `LICENSE` 或未完成合法分发审查，先保留 Draft，不能仅因 CI 通过就公开宣布为开放源码正式版。
+**不要重复使用已有的发布标签**，也不要为了“修复包”直接修改同一标签指向：审计和校验和需要不可变的 Release source ref。修复请创建新的 patch 版本/标签。根目录已有本项目的 MIT `LICENSE`；但未完成第三方与微软运行库分发许可审查、安装测试前，仍应保留 Draft，不能仅凭 CI 通过就公开 Release。
 
 从 GitHub Actions 手工运行工作流（workflow_dispatch）用于验证新分支的 NSIS/ZIP；它**只上传 Actions Artifact，不会创建 Release**。只有 push 版本标签触发的运行才附加到 Draft Release。
 
@@ -89,7 +89,7 @@ git push origin v0.1.0
 
 | 资产 | 目标用户 | 内容 |
 |---|---|---|
-| `TMsgPicker-Setup-x64.exe` | 普通 Windows 用户 | Tauri NSIS 安装、`tmsgpicker.exe`、TDLib/OpenSSL/zlib DLL、第三方声明、MSVC CRT、WebView2 按需安装引导 |
+| `TMsgPicker-Setup-x64.exe` | 普通 Windows 用户 | Tauri NSIS 安装、`tmsgpicker.exe`、TDLib/OpenSSL/zlib DLL、**MIT 与第三方许可声明**、MSVC CRT、WebView2 按需安装引导 |
 | `TMsgPicker-Portable-x64.zip` | 希望免安装的用户、测试人员 | `TMsgPicker/` 目录内 EXE + 原生 DLL + MSVC x64 CRT + `licenses/` |
 | `SHA256SUMS.txt` | 校验文件完整性 | 安装器/ZIP 的 SHA-256（从构建输出计算） |
 
@@ -104,6 +104,7 @@ TMsgPicker/
   z.dll  （或按真实 PE imports 为 zlib1.dll）
   msvcp140*.dll、vcruntime140*.dll 等 MSVC CRT
   licenses/
+    TMsgPicker-MIT.txt
     TDLib.txt
     OpenSSL.txt
     zlib.txt
@@ -157,7 +158,7 @@ Release 默认**没有代码签名**，可能出现 SmartScreen 声誉警告。�
 - [ ] 较大频道扫描时观察 CPU/RSS/网络/磁盘峰值与 `BudgetExceeded`、取消行为；
 - [ ] 安装器/ZIP 不携带真实日志、手机号、`.env`、Session、DPAPI 存储或测试账号；
 - [ ] 逐一检查 TDLib/OpenSSL/zlib 的实际分发许可及 copyright notices；
-- [ ] 决定并提交**本项目自身 `LICENSE`**（例如 MIT 或 Apache-2.0，须项目权利人确认）；
+- [ ] **确认构建基于合入 LICENSE 后的新提交**，安装包与便携版均包含与仓库根目录一致的 `licenses/TMsgPicker-MIT.txt`；
 - [ ] 检查 Visual Studio VC++ 可再分发组件许可证、Telegram API Terms/隐私与商标表述；
 - [ ] 检查 Draft release notes、下载哈希、来源提交、已知限制及无签名说明；
 - [ ] 通过以上人工门槛后，在 GitHub Releases 将 Draft **手动发布**；记录验证设备/Windows 版本与结果。
@@ -169,7 +170,7 @@ Release 默认**没有代码签名**，可能出现 SmartScreen 声誉警告。�
 - **TDLib**：Boost Software License 1.0；**OpenSSL 3**：Apache-2.0；**zlib**：zlib License。脚本从**实际检出或安装的包**中收集对应许可文件，避免手工维护易失真的副本。
 - **gperf**：编译期工具，不包含在最终 ZIP/Setup 中；构建环境仍需遵守其 GPL 许可，不要把可执行程序当作本项目发行物分发。
 - **Visual C++ Runtime**：属于微软可再分发组件，随应用部署的权利及限制应遵循 Visual Studio 许可条款。
-- **应用自己的 `LICENSE`**：目前未由权利人明确决定，因此**本 PR 不擅自代为选定开源许可证**。没有该许可时，对外使用“开源”需谨慎：源码公开可见不等于已取得复制/修改/再分发许可。发布前由项目权利人选择并正式提交。
+- **TMsgPicker 本身**：项目权利人已选择 **MIT License**，根目录 [`LICENSE`](../LICENSE) 使用 `Copyright (c) 2026 Dufunare`。源码和分发包应保留该版权及授权声明。`licenses/TMsgPicker-MIT.txt` 是它的分发副本；并不替代第三方依赖许可。
 - 未使用 Telegram 品牌暗示官方背书；应持续核对适用的 [Telegram API 条款](https://core.telegram.org/api/terms) 和隐私要求。
 
 ## 8. 发布后的响应与下一阶段

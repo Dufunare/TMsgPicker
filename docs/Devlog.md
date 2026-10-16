@@ -148,3 +148,10 @@
 - 尚未完成：Windows GitHub Hosted Runner 上的真实 TDLib 编译与安装器产物验证；干净 Windows VM 的升级/卸载/Session 不丢失手动测试；项目权利人的 `LICENSE` 选择；代码签名。
 
 当前构建文档：[BUILD_WINDOWS.md](BUILD_WINDOWS.md)；发布验收：[RELEASE.md](RELEASE.md)。后续若改变 TDLib pin 或发布机制，请同时更新这两份文档与 [ARCHITECTURE.md](ARCHITECTURE.md)，不要在 Devlog 中再次复制完整使用手册。
+
+### v0.1 MIT 许可证决策
+
+- 项目权利人选择 **MIT License**，仓库根目录 `LICENSE` 使用 `Copyright (c) 2026 Dufunare`。
+- 原生分发 staging 会将应用 MIT 许可证复制至 `licenses/TMsgPicker-MIT.txt`，与 TDLib/OpenSSL/zlib 的版权声明分别保存；NSIS、便携 ZIP 和离线 Mock 测试核对其存在和一致性。
+- 此项变更在首轮手动 Windows Release workflow **启动之后**提交：已经开始的构建仍针对旧提交，不会自动包含 MIT 文件，完成发布前须基于新的 `main` 再次运行。
+- 已解决本项目自有许可证选择；第三方许可和 Microsoft CRT 的合规审查、干净机安装验证、代码签名属于独立事项。
