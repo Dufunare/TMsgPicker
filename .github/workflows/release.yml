@@ -49,6 +49,8 @@ jobs:
               $versions.tdlib.commit -ne 'f381f4b35ebfd52a086ec3af5352ed77bbdbde01') {
             throw 'TDLib dependency baseline changed unexpectedly; update documentation and review.'
           }
+      - name: Offline release staging and integrity regression (synthetic files)
+        run: ./tests/releaseStaging.ps1
 
   build:
     name: Build and inspect Windows x64 assets

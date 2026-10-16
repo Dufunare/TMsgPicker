@@ -67,6 +67,8 @@ main（已通过 review/离线 CI）
 - `scripts/audit-pe-imports.ps1`：依赖审计（不信任 CI PATH）；
 - `scripts/package-release.ps1`：检查 NSIS 内容、便携版 MSVC CRT、校验和及 ZIP。
 
+PR 还会运行 `tests/releaseStaging.ps1` 的**纯合成文件契约测试**：模拟 TDLib/依赖 DLL 与版权声明，验证 Release overlay、资源映射与文件哈希篡改拒绝；该测试不编译/调用真实 TDLib，因此不能代替正式构建或干净机验收。
+
 普通 PR 仍由 `.github/workflows/frontend-ui.yml` 的前端及离线 Rust 测试负责，不允许通过 PR 代码获得发布凭据。新发布流水线**不使用任何 Telegram API secrets**。未来若增加代码签名，应只在可信标签/受保护发布环境使用签名服务，且不得授权不可信 PR 使用证书。
 
 ### 一次发布的操作示例
