@@ -4,14 +4,14 @@ import type { Chat, ChatScope, Connection, FieldName, Filter, ForwardReport, Sca
 export function emptyView() {
   return {
     chatList: [] as Chat[], search: '', chatScope: 'all' as ChatScope, selectedChat: null as Chat | null,
-    scopeKind: 'recent', rawCount: 50, fromDate: '', toDate: '', budget: 5000,
+    scopeKind: 'recent', rawCount: 50, fromDate: '', toDate: '', datePostLimit: 5000, scanAllDates: false,
     filter: { kind: 'and', items: [] } as Filter, sortField: 'views' as FieldName,
     sortEmoji: '👍', descending: true, outputLimit: 20,
     result: null as ScanResult | null, currentRun: '', scanning: false, selected: [] as string[],
     target: '', confirmation: false, forwarding: false, report: null as ForwardReport | null,
     preview: null as ForwardReport | null, reportTarget: '',
     uncertainSends: [] as UnknownSend[],
-    confirmedSelection: null as { target: string; keys: string[]; runId: string } | null,
+    confirmedSelection: null as { target: string; keys: string[]; runId: string; allowIncomplete?: boolean } | null,
     sendUpdates: {} as Record<string, string>, error: '', chatError: '', accountError: '', notice: '', busy: false,
   };
 }
@@ -32,7 +32,7 @@ export function createAccountViews() {
     const view = get(event.profile_id);
     if (event.generation !== statuses[event.profile_id]?.generation || event.result.run_id !== view.currentRun) return;
     view.result = event.result;
-    view.scanning = event.result.status === 'Scanning';
+    view.scanning = event.result.status === 'Running';
     view.selected = view.selected.filter(key => event.result.posts.some(p => p.key === key));
   }
   function sent(event: {profile_id: string; generation: number; target: string; old_message_id: string; state: string}) {

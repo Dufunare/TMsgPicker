@@ -2,6 +2,7 @@
 mod app;
 pub mod core;
 pub mod formatted_text;
+pub mod scan;
 pub mod gateway;
 pub mod services;
 #[cfg(feature = "desktop")]

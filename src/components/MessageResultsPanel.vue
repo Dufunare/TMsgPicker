@@ -13,13 +13,14 @@ function hasMedia(members:{content_kind:string}[]){return members.some(m=>mediaK
     <div class="panel result-header">
       <p v-if="error" role="alert" class="error">{{error}}</p>
       <h2>{{selectedChat?.title??'Messages & Results'}} <span v-if="result" class="badge" :class="result.status">{{result.status}}</span></h2>
-      <p v-if="result">已扫描 {{result.scanned}} 条 · {{result.pages}} 页 · {{result.exact?'精确':'部分结果'}}</p>
-      <p v-if="result?.detail&&result.status==='Error'" class="muted">{{result.detail}}</p>
+      <p v-if="result">范围内 {{result.coverage.examined_posts}} 个 Post · 匹配 {{result.stats.posts_matched}} 个 · 读取底层消息 {{result.stats.raw_messages_read}} 条 · {{result.stats.pages}} 页</p>
+      <p v-if="result?.coverage.date_window_exhausted===false&&result?.status==='Complete'" class="muted">已达到日期范围内指定的 Post 数量；没有遍历整个日期范围。</p>
+      <p v-if="result?.status==='BudgetExceeded'||result?.status==='Interrupted'||result?.status==='Error'" class="muted" role="status">{{result.detail}} · {{result.stop_reason}}</p>
     </div>
     <div v-if="result&&!result.posts.length" class="panel empty">{{scanning?'正在读取历史…':'当前范围没有匹配帖子'}}</div>
     <article v-for="post in result?.posts??[]" :key="post.key" class="panel post">
       <div class="post-top"><strong>{{chatList.find(c=>c.id===post.representative.chat_id)?.title??selectedChat?.title??'Telegram'}}</strong><button :disabled="busy" @click="openPost(post)">查看原文 ↗</button></div>
-      <p class="muted">{{date(post.date)}} · {{post.kind==='album'?'媒体组':'消息'}}<span v-if="post.partial"> · 部分内容</span></p>
+      <p class="muted">{{date(post.date)}} · {{post.kind==='album'?'媒体组':'消息'}}<span v-if="post.completeness.level!=='Verified'" class="post-completeness" :title="post.completeness.reason"> · {{post.completeness.level==='Assumed'?'媒体组连续性推定完整':post.completeness.level==='Truncated'?'已知有成员缺失':'成员完整性未知'}}</span></p>
       <p v-if="post.text" class="post-text"><LinkedText :text="post.text" :links="post.links"/></p>
       <div v-if="hasMedia(post.members)" class="post-media">
         <button class="media-expander" type="button" :aria-expanded="!!expanded[post.key]" @click="expanded[post.key]=!expanded[post.key]">

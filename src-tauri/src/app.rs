@@ -319,10 +319,10 @@ fn gateway(s: &AccountRuntime) -> Result<Arc<TdlibGateway>> {
     }
     client(s)
 }
-fn selection(s: &AccountRuntime, run_id: &str, post_keys: &[String]) -> Result<Vec<MessageKey>> {
+fn selection(s: &AccountRuntime, run_id: &str, post_keys: &[String], allow_incomplete: bool) -> Result<Vec<MessageKey>> {
     let results = s.results.lock().unwrap();
     let r = results.as_ref().ok_or("Run a query first")?;
-    if r.run_id != run_id || r.status == core::ScanStatus::Scanning {
+    if r.run_id != run_id || r.status == core::ScanStatus::Running {
         return Err("Query selection is stale or still scanning".into());
     }
     let mut keys = Vec::new();
@@ -332,6 +332,10 @@ fn selection(s: &AccountRuntime, run_id: &str, post_keys: &[String]) -> Result<V
             .iter()
             .find(|p| &p.key == key)
             .ok_or("Post is no longer in results")?;
+        if matches!(p.completeness.level,core::CompletenessLevel::Unknown|core::CompletenessLevel::Truncated)
+            && !allow_incomplete {
+            return Err("该 Post 可能缺少媒体组成员，必须明确确认后才允许转发".into());
+        }
         keys.extend(p.members.iter().map(|m| m.key.clone()));
     }
     Ok(keys)
@@ -1393,6 +1397,10 @@ fn start_query(
             Err(e) => publish(ScanResult {
                 run_id,
                 status: core::ScanStatus::Error,
+                stop_reason:Some(core::StopReason::GatewayFailure),
+                scope:spec.scope.clone(),
+                coverage:core::ScanCoverage::default(),
+                stats:core::ScanStats::default(),
                 scanned: 0,
                 pages: 0,
                 exact: false,
@@ -1612,6 +1620,10 @@ mod tests {
         let result = ScanResult {
             run_id: "same-run".into(),
             status: core::ScanStatus::Complete,
+            stop_reason:Some(core::StopReason::PostLimitReached),
+            scope:core::Scope::Recent{count:50},
+            coverage:core::ScanCoverage {scope_complete:true,..Default::default()},
+            stats:core::ScanStats::default(),
             scanned: 1,
             pages: 1,
             exact: true,
@@ -1731,6 +1743,10 @@ mod tests {
         let old = ScanResult {
             run_id: "old".into(),
             status: core::ScanStatus::Complete,
+            stop_reason:Some(core::StopReason::PostLimitReached),
+            scope:core::Scope::Recent{count:50},
+            coverage:core::ScanCoverage {scope_complete:true,..Default::default()},
+            stats:core::ScanStats::default(),
             scanned: 50,
             pages: 2,
             exact: true,
@@ -1741,11 +1757,11 @@ mod tests {
         assert!(s.results.lock().unwrap().is_none());
         let current = ScanResult {
             run_id: "new".into(),
-            status: core::ScanStatus::Scanning,
+            status: core::ScanStatus::Running,
             ..old.clone()
         };
         assert!(retain_result(&s, &current, 0));
-        assert!(selection(&s, "new", &[]).is_err());
+        assert!(selection(&s, "new", &[], false).is_err());
         let current = ScanResult {
             status: core::ScanStatus::Complete,
             ..current
@@ -1753,8 +1769,8 @@ mod tests {
         assert!(retain_result(&s, &current, 0));
         assert!(!retain_result(&s, &old, 0));
         assert_eq!(s.results.lock().unwrap().as_ref().unwrap().run_id, "new");
-        assert!(selection(&s, "old", &[]).is_err());
-        assert!(selection(&s, "new", &["missing-post".into()]).is_err());
+        assert!(selection(&s, "old", &[], false).is_err());
+        assert!(selection(&s, "new", &["missing-post".into()], false).is_err());
         s.epoch.store(1, Ordering::SeqCst);
         assert!(!retain_result(&s, &current, 0));
         assert!(retain_result(&s, &current, 1));
@@ -1799,6 +1815,7 @@ async fn preview_forward(
     target: String,
     post_keys: Vec<String>,
     run_id: String,
+    allow_incomplete: Option<bool>,
 ) -> Result<ForwardReport> {
     background(move || {
         let global = app.state::<AppState>();
@@ -1811,7 +1828,7 @@ async fn preview_forward(
             .lifecycle
             .try_lock()
             .map_err(|_| "Session operation in progress")?;
-        let keys = selection(&s, &run_id, &post_keys)?;
+        let keys = selection(&s, &run_id, &post_keys, allow_incomplete.unwrap_or(false))?;
         ActionService::preview(gateway(&s)?.as_ref(), &target, &keys)
     })
     .await
@@ -1824,6 +1841,7 @@ async fn forward_selected(
     post_keys: Vec<String>,
     run_id: String,
     confirmed: bool,
+    allow_incomplete: Option<bool>,
 ) -> Result<ForwardReport> {
     if !confirmed {
         return Err("Explicit confirmation is required".into());
@@ -1843,7 +1861,7 @@ async fn forward_selected(
             return Err("Forwarding is already running".into());
         }
         let r = (|| {
-            let keys = selection(&s, &run_id, &post_keys)?;
+            let keys = selection(&s, &run_id, &post_keys, allow_incomplete.unwrap_or(false))?;
             let mut report = ActionService::forward(gateway(&s)?.as_ref(), &target, &keys)?;
             let updates = s.sent_updates.lock().unwrap();
             let mut pending = s.pending.lock().unwrap();

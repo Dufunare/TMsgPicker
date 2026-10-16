@@ -50,7 +50,8 @@ const scopeKind = field('scopeKind');
 const rawCount = field('rawCount');
 const fromDate = field('fromDate');
 const toDate = field('toDate');
-const budget = field('budget');
+const datePostLimit = field('datePostLimit');
+const scanAllDates = field('scanAllDates');
 const filter = field('filter');
 const sortField = field('sortField');
 const sortEmoji = field('sortEmoji');
@@ -156,17 +157,30 @@ async function runQuery() {
   v.error='';if(!v.selectedChat){v.error='请先选择一个聊天';return;}
   const from=Date.parse(v.fromDate)/1000,to=Date.parse(v.toDate)/1000;
   if(v.scopeKind==='dates'&&(!Number.isFinite(from)||!Number.isFinite(to)||from>=to)){v.error='请输入有效的开始／结束日期';return;}
-  const spec:QuerySpec={version:1,chat_id:v.selectedChat.id,scope:v.scopeKind==='recent'?{kind:'recent',count:v.rawCount}:{kind:'dates',from:Math.floor(from),to:Math.floor(to),budget:v.budget},filter:v.filter,sort:[{field:{kind:v.sortField,...(v.sortField==='reaction'?{emoji:v.sortEmoji}:{})},descending:v.descending}],output_limit:v.outputLimit};
+  const spec:QuerySpec={version:2,chat_id:v.selectedChat.id,scope:v.scopeKind==='recent'?{kind:'recent',count:v.rawCount}:{kind:'dates',from:Math.floor(from),to:Math.floor(to),limit_posts:v.scanAllDates?null:v.datePostLimit},filter:v.filter,sort:[{field:{kind:v.sortField,...(v.sortField==='reaction'?{emoji:v.sortEmoji}:{})},descending:v.descending}],output_limit:v.outputLimit};
   const runId=crypto.randomUUID();v.currentRun=runId;v.scanning=true;v.selected=[];v.confirmation=false;v.report=null;v.confirmedSelection=null;
-  v.result={run_id:runId,status:'Scanning',scanned:0,pages:0,exact:false,detail:'正在读取历史',posts:[]};
+  v.result={run_id:runId,status:'Running',stop_reason:null,scope:spec.scope,
+    coverage:{requested_posts:spec.scope.kind==='recent'?spec.scope.count:spec.scope.limit_posts,examined_posts:0,scope_complete:false,date_window_exhausted:null},
+    stats:{raw_messages_read:0,posts_finalized:0,posts_matched:0,posts_returned:0,pages:0},
+    scanned:0,pages:0,exact:false,detail:'正在读取历史',posts:[]};
   try{await invokeCommand('start_query',{profileId:id,spec,runId});}catch(e){if(v.currentRun===runId){v.scanning=false;v.error=String(e);v.result={...v.result!,status:'Error',detail:String(e)};}}
 }
 async function cancelQuery(){const id=profileId.value,runId=currentRun.value;await action(async()=>{await invokeCommand('cancel_query',{profileId:id,runId});});}
 async function openPost(post:Post){const id=profileId.value;await action(async()=>{const url=await invokeCommand<string>('message_link',{profileId:id,key:post.representative,album:post.kind==='album'});await openUrl(url);});}
 async function prepareForward(){
-  const id=profileId.value,v=view.value,selection={target:v.target,keys:[...v.selected],runId:v.currentRun};
+  const id=profileId.value,v=view.value;
+  const selectedPosts=v.result?.posts.filter(p=>v.selected.includes(p.key))??[];
+  const incomplete=selectedPosts.filter(p=>p.completeness.level==='Unknown'||p.completeness.level==='Truncated');
+  let allowIncomplete=false;
+  if(incomplete.length) {
+    const answer=await askDialog({title:'确认转发可能不完整的 Post',
+      text:`当前选中的 ${incomplete.length} 个 Post 的成员完整性无法确认，转发可能缺少媒体。请先检查来源；仍要继续预览并允许转发当前已取得的成员吗？`});
+    if(!answer)return;
+    allowIncomplete=true;
+  }
+  const selection={target:v.target,keys:[...v.selected],runId:v.currentRun,allowIncomplete};
   await action(async()=>{
-    const report=await invokeCommand<ForwardReport>('preview_forward',{profileId:id,target:selection.target,postKeys:selection.keys,runId:selection.runId});
+    const report=await invokeCommand<ForwardReport>('preview_forward',{profileId:id,target:selection.target,postKeys:selection.keys,runId:selection.runId,allowIncomplete});
     if(accountViews.views[id]!==v||selection.target!==v.target||selection.runId!==v.currentRun||selection.keys.join('|')!==v.selected.join('|'))return;
     v.preview=report;v.confirmedSelection=selection;v.confirmation=true;
   });
@@ -176,7 +190,7 @@ async function forward(){
   v.forwarding=true;v.error='';
   try{
     v.reportTarget=selection.target;
-    const report=await invokeCommand<ForwardReport>('forward_selected',{profileId:id,target:selection.target,postKeys:selection.keys,runId:selection.runId,confirmed:true});
+    const report=await invokeCommand<ForwardReport>('forward_selected',{profileId:id,target:selection.target,postKeys:selection.keys,runId:selection.runId,confirmed:true,allowIncomplete:selection.allowIncomplete??false});
     if(accountViews.views[id]!==v)return;
     v.report=report;
     for(const item of report.items)if(item.sent_id){const state=v.sendUpdates[`${selection.target}:${item.sent_id}`];if(state)item.state=state;}
@@ -214,7 +228,7 @@ onMounted(async () => {
 });
 onUnmounted(()=>{unlisteners.forEach(fn=>fn());clearTimeout(chatTimer);clearAvatars();answerDialog(null);});
 
-return { settingsTargetReady,targetError,accountProfile,refreshSettings,dialog,answerDialog,chatScope,switchChatScope,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetReport,resetBusy,resetLayout,resizeLayout };
+return { settingsTargetReady,targetError,accountProfile,refreshSettings,dialog,answerDialog,chatScope,switchChatScope,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,datePostLimit,scanAllDates,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetReport,resetBusy,resetLayout,resizeLayout };
 }
 export type Workspace = ReturnType<typeof useWorkspace>;
 export const workspaceKey=Symbol("workspace");
