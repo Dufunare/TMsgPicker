@@ -170,21 +170,28 @@ async function cancelQuery(){const id=profileId.value,runId=currentRun.value;awa
 async function openPost(post:Post){const id=profileId.value;await action(async()=>{const url=await invokeCommand<string>('message_link',{profileId:id,key:post.representative,album:post.kind==='album'});await openUrl(url);});}
 async function prepareForward(){
   const id=profileId.value,v=view.value;
-  const selectedPosts=v.result?.posts.filter(p=>v.selected.includes(p.key))??[];
+  // Capture the entire selection before any asynchronous confirmation; a
+  // later account switch or rerun must invalidate, not retarget, this action.
+  const selection={target:v.target,keys:[...v.selected],runId:v.currentRun,allowIncomplete:false};
+  const selectedPosts=v.result?.posts.filter(p=>selection.keys.includes(p.key))??[];
   const incomplete=selectedPosts.filter(p=>p.completeness.level==='Unknown'||p.completeness.level==='Truncated');
-  let allowIncomplete=false;
   if(needsIncompleteConfirmation(selectedPosts)) {
     const answer=await askDialog({title:'确认转发可能不完整的 Post',
       text:`当前选中的 ${incomplete.length} 个 Post 的成员完整性无法确认，转发可能缺少媒体。请先检查来源；仍要继续预览并允许转发当前已取得的成员吗？`});
     if(!answer)return;
-    allowIncomplete=true;
+    selection.allowIncomplete=true;
   }
-  const selection={target:v.target,keys:[...v.selected],runId:v.currentRun,allowIncomplete};
-  await action(async()=>{
-    const report=await invokeCommand<ForwardReport>('preview_forward',{profileId:id,target:selection.target,postKeys:selection.keys,runId:selection.runId,allowIncomplete});
-    if(accountViews.views[id]!==v||selection.target!==v.target||selection.runId!==v.currentRun||selection.keys.join('|')!==v.selected.join('|'))return;
+  const stillCurrent=()=>profileId.value===id&&accountViews.views[id]===v
+    &&selection.target===v.target&&selection.runId===v.currentRun
+    &&selection.keys.join('|')===v.selected.join('|');
+  if(!stillCurrent()){v.error='账号或选择已变化，请重新准备转发';return;}
+  v.busy=true;v.error='';
+  try {
+    const report=await invokeCommand<ForwardReport>('preview_forward',{profileId:id,
+      target:selection.target,postKeys:selection.keys,runId:selection.runId,allowIncomplete:selection.allowIncomplete});
+    if(!stillCurrent())return;
     v.preview=report;v.confirmedSelection=selection;v.confirmation=true;
-  });
+  }catch(e){v.error=String(e);}finally{v.busy=false;}
 }
 async function forward(){
   const id=profileId.value,v=view.value,selection=v.confirmedSelection;if(!selection)return;

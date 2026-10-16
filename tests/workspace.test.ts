@@ -152,3 +152,40 @@ test('chat scope is sent in IPC and late replies never replace the selected list
   assert.deepEqual(w.chatList.value.map(x=>x.id),['1']);
   app.unmount();
 });
+
+test('incomplete Post confirmation cannot preview an old account after switching',async()=>{
+  const calls:Array<{command:string;args:any}>=[];
+  let w!:ReturnType<typeof useWorkspace>;
+  const transport=async(command:string,args:any)=>{
+    calls.push({command,args});
+    if(command==='preview_forward')return {items:[]};
+  };
+  const app=renderer.createApp({setup(){
+    w=useWorkspace(false,transport as Parameters<typeof useWorkspace>[1]);
+    return()=>h('div');
+  }});app.mount({});
+  w.profileId.value='A';w.currentRun.value='test-run';w.target.value='-1002';w.selected.value=['p'];
+  w.result.value={
+    run_id:'test-run',status:'Complete',stop_reason:'PostLimitReached',detail:'',
+    scope:{kind:'recent',count:1},
+    coverage:{requested_posts:1,examined_posts:1,scope_complete:true,date_window_exhausted:null},
+    stats:{raw_messages_read:1,posts_finalized:1,posts_matched:1,posts_returned:1,pages:1},
+    scanned:1,pages:1,exact:true,
+    posts:[{key:'p',kind:'album',members:[],representative:{chat_id:'1',message_id:'2'},
+      date:100,text:'',metrics:{views:null,forwards:null,reply_info:null,reactions:null},
+      provenance:{},completeness:{level:'Unknown',reason:'older_boundary_not_observed'}}],
+  };
+  const pending=w.prepareForward();await new Promise(resolve=>setImmediate(resolve));
+  assert.match(w.dialog.value?.title??'',/可能不完整/);
+  w.profileId.value='B';w.answerDialog({text:'',deleteData:false});await pending;
+  assert.equal(calls.some(x=>x.command==='preview_forward'),false);
+  assert.equal(w.report.value,null);
+  w.profileId.value='A';
+  const confirmed=w.prepareForward();await new Promise(resolve=>setImmediate(resolve));
+  w.answerDialog({text:'',deleteData:false});await confirmed;
+  assert.deepEqual(calls.at(-1),{command:'preview_forward',args:{
+    profileId:'A',target:'-1002',postKeys:['p'],runId:'test-run',allowIncomplete:true,
+  }});
+  assert.equal(w.confirmation.value,true);
+  app.unmount();
+});
