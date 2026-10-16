@@ -1,0 +1,20 @@
+{
+  "tdlib": {
+    "version": "1.8.68",
+    "commit": "f381f4b35ebfd52a086ec3af5352ed77bbdbde01",
+    "committed_utc": "2026-10-12T16:43:06Z",
+    "repository": "https://github.com/tdlib/td.git"
+  },
+  "vcpkg": {
+    "commit": "e456309491fd875487bf02b8a0dca76c1b1b00cc",
+    "repository": "https://github.com/microsoft/vcpkg.git"
+  },
+  "native_dependencies": {
+    "openssl": "3.6.5#1",
+    "zlib": "1.3.2#2",
+    "gperf": "3.3#1",
+    "triplet": "x64-windows"
+  },
+  "toolchain": "Visual Studio 2022 MSVC x64; CMake; Windows SDK",
+  "note": "Source/pin baseline, not proof of provenance for older local Release DLLs."
+}

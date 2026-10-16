@@ -37,3 +37,7 @@ Release/*
 *.sqlite-*
 *.db
 *.db-*
+
+# Reproducible TDLib / native build and release artifacts (never commit binaries).
+/native/
+/src-tauri/tauri.release.generated.json

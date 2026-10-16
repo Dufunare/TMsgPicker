@@ -20,7 +20,7 @@ TMsgPicker 是 **本地优先的专用 Telegram 历史消息客户端**。目标
 | 外观与栏宽 | 外观全局保存；栏宽仅当前窗口内存 | 避免无意义持久化，减少 UI 偏好与 Session 耦合 |
 | 发送安全 | 预检、用户确认、发送回执／Pending／Unknown | 不能把“请求提交成功”误报为真正送达 |
 | 媒体 | TDLib 文件校验、受限 Base64 IPC、账号级缓存与并发调度 | 较易控制路径权限，但大图仍会产生 IPC/内存成本 |
-| 发布 | Windows x64 开发构建为主 | 安装包、运行库自动封装和跨平台发行尚未验收 |
+| 发布 | Windows x64，固定 TDLib 源码 + NSIS/Portable ZIP + Draft Release CI | 支持可审计的原生依赖构建与自动打包；干净机实测、正式公开发布、签名仍需人工验收 |
 
 ## 2. 分层与数据流
 
@@ -247,3 +247,13 @@ tdlib/{db,files}/         旧版本 Legacy 数据（按需保留）
 **明确未解决或未完整覆盖的范围**：跨平台桌面分发、正式安装器及运行库封装、账号 API 凭据的默认分发（刻意不提供）、全部聊天实时索引、超大结果的原生分页提取、TDLib 磁盘缓存治理、Windows GUI 实测 FPS/内存曲线、批量转发图形入口，以及崩溃/强杀后尚未最终确认发送的跨进程回执恢复。
 
 下一步开发新功能时，优先保持三条不变量：**Post 是查询单位；账号+generation+run 所有权不能跨界；关闭/注销和未知发送必须以真实证据而非猜测驱动。**
+
+## 10. v0.1 Windows 原生依赖与 Release 决策
+
+**来源固定**：TDLib 1.8.68，固定至 2026-10-12 16:43 UTC 提交 `f381f4b35ebfd52a086ec3af5352ed77bbdbde01`；配套 vcpkg commit `e456309491fd875487bf02b8a0dca76c1b1b00cc`（OpenSSL 3.6.5#1、zlib 1.3.2#2、构建工具 gperf 3.3#1）。源码和 native 输出放在 Git 忽略的 `native/`，项目代码不直接 vendoring TDLib，`scripts/native-versions.json` 是唯一版本锁定数据源。历史手动构建 DLL 的来源并未自动验证。
+
+**部署模型**：`tdjson.lib` 用于 MSVC 编译链接；最终 `tdjson.dll`、OpenSSL/zlib 的**真实 PE 导入名称** DLL 需位于 `tmsgpicker.exe` 同目录。普通 `src-tauri/build.rs` 只负责 Cargo 开发期链接/复制；Release 脚本独立生成 Tauri 配置 overlay，将已验证哈希的 DLL 和版权声明映射到 NSIS 安装目标目录。Portable ZIP 也包含运行 DLL 和 MSVC CRT；WebView2 通过安装器下载引导或由用户系统提供。
+
+**CI 安全界限**：Pull Request 只静态解析 PowerShell 和执行已有离线检查；手动 workflow_dispatch 可构建发行资产但不创建公开 Release。只有匹配 Tauri 版本的 `vX.Y.Z` tag 才启动 Draft/Prerelease 生成，随后必须由人完成干净 Windows x64 安装、升级/卸载、Session 完整性和版权审查。发行构建**没有 Telegram 开发者 API Hash 变量注入**，用户始终自带 API ID/Hash。
+
+**可复现级别**：锁定 TDLib/vcpkg 源码提交与 port 版本并记录构建文件 SHA-256；目前没有完全锁定 MSVC/CMake/Windows runner 补丁版本，因此不声称产物可逐字节重复。许可证、签名与发布审核详见 [RELEASE.md](RELEASE.md)，构建步骤详见 [BUILD_WINDOWS.md](BUILD_WINDOWS.md)。

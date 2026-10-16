@@ -171,7 +171,7 @@ TMsgPicker/
 |---|---|
 | `src-tauri/src/bin/tdlib_smoke.rs` | 手动 TDLib 原生冒烟工具；属于开发 Bring-up 而不是面向用户的 UI |
 | `src-tauri/src/bin/tdlib_auth.rs` | 早期手动授权诊断 CLI；可能涉及敏感输入/日志，勿将输出贴入公开 Issue |
-| `src-tauri/build.rs` | 检查 `tdjson.lib` 与运行 DLL，添加 MSVC 链接路径并 staging 到 Cargo profile |
+| `src-tauri/build.rs` | 检查 `tdjson.lib` 与运行 DLL（zlib 可为 `z.dll`/`zlib1.dll`），添加 MSVC 链接路径并 staging 到 Cargo profile；**不负责 NSIS 打包** |
 | `src-tauri/Cargo.toml` | Rust 包、desktop feature、依赖与 Release 优化配置 |
 | `src-tauri/Cargo.lock` | 固定 Rust 依赖解析版本 |
 | `src-tauri/tauri.conf.json` | Tauri 产品、窗口尺寸、安全 CSP、前端入口、Bundle 配置（尚非发布验收） |
@@ -257,3 +257,18 @@ ApplicationSettings / AccountSettings / AppearanceSettings
 目前仓库没有独立的云后端、账号代理服务器、自动更新服务、统一搜索数据库、跨平台发布脚本、自动构建 TDLib 的脚本，也没有已经验收的 NSIS/MSI 制品。`tauri.conf.json` 开启 `bundle` 不代表打包完成了所有 TDLib/OpenSSL/zlib 依赖。
 
 仓库的旧开发规格、阶段验收报告已收敛为三份维持中的文档。需要查具体历史设计、当时的修改过程或某次 CI 证据，可查看 [Devlog.md](Devlog.md) 中相应日期/提交，再通过 Git 历史打开旧文件版本；不要在当前维护入口中保留多份相互矛盾的现行规范。
+
+## 10. Windows 原生依赖与 Release 脚本索引
+
+| 路径 | 职责 |
+|---|---|
+| `scripts/native-versions.json` | **TDLib 1.8.68（2026-10-12）**、固定 TDLib SHA、vcpkg SHA 及 OpenSSL/zlib/gperf port 修订号 |
+| `scripts/build-tdlib.ps1` | 从完整 SHA 检出 TDLib/vcpkg，检查 port 版本，调用 vcpkg 和 VS2022 CMake，生成 `tdjson.lib/dll`、依赖 DLL、SHA-256 manifest |
+| `scripts/stage-native.ps1` | 检查固定构建产物哈希，复制实际版权声明，生成 Tauri Release-only `tauri.release.generated.json` |
+| `scripts/audit-pe-imports.ps1` | 用 MSVC dumpbin 验证免安装目录 EXE/DLL 的 PE 导入依赖是否由分发文件或系统库提供 |
+| `scripts/package-release.ps1` | 检查 NSIS 包内容、组装含运行时和许可声明的 Portable ZIP、SHA256SUMS |
+| `.github/workflows/release.yml` | PR 静态校验、workflow_dispatch 构建资产、`vX.Y.Z` 标签构建后创建 Draft Prerelease |
+| `docs/BUILD_WINDOWS.md` | 从空白开发机开始的 Windows/TDLib 依赖构建操作及故障处理 |
+| `docs/RELEASE.md` | CI/CD、打包边界、BYO API、安全、许可证及真实干净机验收流程 |
+
+`native/` 和 `src-tauri/tauri.release.generated.json` 是**生成内容**，不进入 Git 历史。普通用户无需编译 TDLib；官方二进制只携带运行 DLL，不含 `tdjson.lib`、CMake、gperf 或源码。发布流程仍需要真实 Windows 安装/升级与 TDLib 会话验收，不能把脚本和 CI 的存在直接写成公开 Release 已经完成。

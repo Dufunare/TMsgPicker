@@ -137,3 +137,14 @@
 - 用户操作步骤写入 [README](../README.md)，当前分层与安全决策写入 [ARCHITECTURE.md](ARCHITECTURE.md)，文件职责写入 [projects.md](projects.md)；本日志只记录**为什么改变、改变了什么、哪些还未验证**。
 - 不在 Devlog 中复制全部测试输出、重复大段源码、个人路径、凭据、Session、手机号或真实消息。
 - 被本次整理移除的早期规格/验收文件，内容仍存在于 Git 历史，必要时可以按历史提交检索。删除旧的当前文档入口**不等于抹去版本历史**。
+
+## 2026-10-16：v0.1 原生依赖锁定与发布机制准备
+
+- 明确 TDLib 版本：**1.8.68，2026-10-12 16:43 UTC，commit `f381f4b35ebfd52a086ec3af5352ed77bbdbde01`**。选择固定 commit 而非 `master`/浮动 tag，避免后续上游变更改变 ABI 或构建产物。
+- 固定 vcpkg 来源和 OpenSSL/zlib/gperf port 修订；通过 PowerShell 构建脚本检出依赖，编译 tdjson，并记录原生 DLL 哈希和实际许可证。已有旧 Release DLL 的来源**没有由此得到证明**。
+- 添加 NSIS 安装器与免安装 ZIP staging、PE 依赖审计、MSVC CRT、SHA256SUMS；原生运行库明确位于 EXE 同级，避免“Cargo 能运行而安装包缺 DLL”。
+- 增加 GitHub Actions：PR 解析脚本、手动触发构建资产、发布标签创建 **Draft/Prerelease**，不自动向公众发布或做 Telegram 账号真实操作。
+- 继续采用 **BYO API**，**不嵌入任何开发者共享 API ID/Hash**，构建过程也不需要 Telegram 凭据。
+- 尚未完成：Windows GitHub Hosted Runner 上的真实 TDLib 编译与安装器产物验证；干净 Windows VM 的升级/卸载/Session 不丢失手动测试；项目权利人的 `LICENSE` 选择；代码签名。
+
+当前构建文档：[BUILD_WINDOWS.md](BUILD_WINDOWS.md)；发布验收：[RELEASE.md](RELEASE.md)。后续若改变 TDLib pin 或发布机制，请同时更新这两份文档与 [ARCHITECTURE.md](ARCHITECTURE.md)，不要在 Devlog 中再次复制完整使用手册。
