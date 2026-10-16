@@ -1,14 +1,28 @@
 <script setup lang="ts">
-import {reactive,watch} from 'vue';
+import {computed,reactive,ref,watch} from 'vue';
 import {useWorkspaceContext} from '../useWorkspace';
 import LinkedText from './LinkedText.vue';
 import MediaPreview from './MediaPreview.vue';
 import {scanStatusLabel,scanReasonLabel,postCompletenessLabel,windowPartiallyCovered} from '../scan/scanUi';
 const {busy,error,chatList,selectedChat,activeResult:result,scanning,openPost,count,reactionLabel,date,profileId,connection}=useWorkspaceContext();
 const expanded=reactive<Record<string,boolean>>({});
+// Fixed-size result pages keep mounted DOM and Vue patch work bounded even
+// when the requested output_limit is 1000. No new native results are fetched.
+const PAGE_SIZE=40;
+const page=ref(1);
+const posts=computed(()=>result.value?.posts??[]);
+const pageCount=computed(()=>Math.max(1,Math.ceil(posts.value.length/PAGE_SIZE)));
+const visiblePosts=computed(()=>posts.value.slice((page.value-1)*PAGE_SIZE,page.value*PAGE_SIZE));
 watch([profileId,()=>selectedChat.value?.id,()=>result.value?.run_id],()=>{
+  page.value=1;
   for(const key of Object.keys(expanded))delete expanded[key];
 });
+watch(pageCount,()=>{if(page.value>pageCount.value)page.value=pageCount.value;});
+function changePage(next:number){
+  if(next<1||next>pageCount.value)return;
+  page.value=next;
+  for(const key of Object.keys(expanded))delete expanded[key];
+}
 const mediaKinds=new Set(['photo','video','animation','video_note','document','audio','voice_note','sticker']);
 function hasMedia(members:{content_kind:string}[]){return members.some(m=>mediaKinds.has(m.content_kind));}
 </script>
@@ -23,7 +37,12 @@ function hasMedia(members:{content_kind:string}[]){return members.some(m=>mediaK
     </div>
     <div v-if="!result" class="panel empty">{{selectedChat?'请在右侧 Query Builder 执行查询':'请先选择聊天'}}</div>
     <div v-else-if="!result.posts.length" class="panel empty">{{scanning?'正在读取历史…':'当前范围没有匹配帖子'}}</div>
-    <article v-for="post in result?.posts??[]" :key="post.key" class="panel post">
+    <div v-if="posts.length>PAGE_SIZE" class="result-pagination" role="navigation" aria-label="扫描结果分页">
+      <span>第 {{page}} / {{pageCount}} 页 · 共 {{posts.length}} 个结果</span>
+      <button type="button" :disabled="page<=1" @click="changePage(page-1)" aria-label="上一页">上一页</button>
+      <button type="button" :disabled="page>=pageCount" @click="changePage(page+1)" aria-label="下一页">下一页</button>
+    </div>
+    <article v-for="post in visiblePosts" :key="post.key" class="panel post">
       <div class="post-top"><strong>{{chatList.find(c=>c.id===post.representative.chat_id)?.title??selectedChat?.title??'Telegram'}}</strong><button :disabled="busy" @click="openPost(post)">查看原文 ↗</button></div>
       <p class="muted">{{date(post.date)}} · {{post.kind==='album'?'媒体组':'消息'}}<span v-if="post.completeness.level!=='Verified'" class="post-completeness" :title="post.completeness.reason"> · {{postCompletenessLabel(post.completeness.level)}}</span></p>
       <p v-if="post.text" class="post-text"><LinkedText :text="post.text" :links="post.links"/></p>

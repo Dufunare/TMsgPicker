@@ -1,4 +1,4 @@
-import { reactive } from 'vue';
+import { markRaw, reactive } from 'vue';
 import type { Chat, ChatScope, Connection, FieldName, Filter, ForwardReport, ScanResult, UnknownSend } from './types';
 
 export function emptyView() {
@@ -42,9 +42,12 @@ export function createAccountViews() {
     const view = get(event.profile_id);
     if (event.generation !== statuses[event.profile_id]?.generation || event.result.run_id !== view.currentRun
       || !view.scanChatId || view.scanChatId !== view.selectedChat?.id) return;
-    view.result = event.result;
+    // Scan payloads are immutable snapshots. Deep-proxying hundreds of Posts
+    // and their member arrays adds reactive traversal cost without any benefit.
+    view.result = markRaw(event.result);
     view.scanning = event.result.status === 'Running';
-    view.selected = view.selected.filter(key => event.result.posts.some(p => p.key === key));
+    const available = new Set(event.result.posts.map(post => post.key));
+    view.selected = view.selected.filter(key => available.has(key));
   }
   function sent(event: {profile_id: string; generation: number; target: string; old_message_id: string; state: string}) {
     const view = get(event.profile_id);
