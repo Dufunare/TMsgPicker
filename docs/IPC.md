@@ -23,8 +23,8 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 | `start_query` | `{profileId,spec,runId}` | 启动此账号后台扫描；新 run 只取消同账号旧 run |
 | `cancel_query` | `{profileId,runId}` | 只取消此账号对应 run；请求每约 50ms 检查取消 |
 | `message_link` | `{profileId,key:{chat_id,message_id},album}` | TDLib 返回且通过协议检查的 URL |
-| `preview_forward` | `{profileId,target,postKeys,runId}` | `ForwardReport`，只预检不发送 |
-| `forward_selected` | `{profileId,target,postKeys,runId,confirmed:true}` | `ForwardReport`；只验证此账号的查询结果、选择及权限 |
+| `preview_forward` | `{profileId,target,postKeys,runId,allowIncomplete?:boolean}` | `ForwardReport`，只预检不发送 |
+| `forward_selected` | `{profileId,target,postKeys,runId,confirmed:true,allowIncomplete?:boolean}` | `ForwardReport`；只验证此账号的查询结果、选择及权限 |
 
 ## 设置与账号命令
 
@@ -65,7 +65,7 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 
 ```json
 {
-  "version": 1,
+  "version": 2,
   "chat_id": "-1001",
   "scope": {"kind":"recent","count":50},
   "filter": {
@@ -80,7 +80,7 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 }
 ```
 
-日期 Scope：`{kind:"dates",from,to,budget}`；区间 `[from,to)`，budget 包括为定位范围而扫描的更新消息。
+日期 Scope V2：`{kind:"dates",from,to,limit_posts:100}`；区间 `[from,to)`，计数单位始终为 Post；`limit_posts:null` 表示扫描全部日期窗口（仍受独立安全额度限制）。最近范围 `{kind:"recent",count:50}` 同样按 Post 计数。旧版 version=1 和 dates.budget 不再接受，避免将原始消息额度误解释为 Post 数量。
 
 字段：views、forwards、comments、reply_info、reaction_total、`{kind:"reaction",emoji:"👍"}`、post_kind、media_album_id、content_kind、date。post_kind/content_kind/media_album_id 是字符串，其余是整数；`reply_info` 表示存在的回复信息对应计数，可用 `IS NULL` 检查存在性。post_kind 值仅 single/album。
 
@@ -91,7 +91,7 @@ Tauri 顶层参数用 camelCase，DTO 内部字段用 snake_case。命令错误�
 | 事件 | 负载 / 行为 |
 |---|---|
 | `connection` | `{profile_id,generation,runtime_state,auth_state,connection_state,detail,user_disconnected}`；不广播手机号／验证码／邮箱／密码。user_disconnected 仅在用户断开成功后设置，网络更新不改变它 |
-| `query-progress` | `{profile_id,generation,result:ScanResult}`；ScanResult 保持 `{run_id,status,scanned,pages,exact,detail,posts}`，status 为 Scanning／Partial／Complete／Cancelled／Error |
+| `query-progress` | `{profile_id,generation,result:ScanResult}`；V2 增加 `scope,coverage,stats,stop_reason`，status 为 Running／Complete／BudgetExceeded／Interrupted／Error；`posts[*].completeness` 记录 Verified／Assumed／Truncated／Unknown，和扫描状态独立。兼容字段 scanned/pages/exact 仅作为迁移过渡，不用于判定媒体组完整性 |
 | `forward-update` | `{profile_id,generation,target,old_message_id,state:"Sent"|"Failed"|"Unknown"}`；对应发送临时 ID |
 | `close-confirmation-required` | 仅发给 main，负载为 CloseChallenge；退出前 Pending 未确认，主窗口提示等待／确认，不自动关闭 |
 | `workspace-settings-changed` | `{source:"main"\|"settings"}`；前端发送不含秘密的刷新通知，另一窗口重新通过 app_settings 读取非敏感状态；不作为会话授权依据 |

@@ -35,13 +35,13 @@ impl<'a> HistoryReader<'a> {
             // 99 newer neighbors. Reject the anchor if no out-of-range head
             // can be observed: that would silently lose eligible newer Posts.
             if let Ok(anchor)=gateway.request(json!({"@type":"getChatMessageByDate","chat_id":chat,
-                "date":to.saturating_sub(1)}),cancel) {
-                if let Some(mid)=anchor["id"].as_i64().filter(|v|*v>0)
-                    && anchor["chat_id"].as_i64()==Some(chat) {
-                    cursor=mid;
-                    offset=-99;
-                    anchor_pending=true;
-                }
+                "date":to.saturating_sub(1)}),cancel)
+                && let Some(mid)=anchor["id"].as_i64().filter(|v|*v>0)
+                && anchor["chat_id"].as_i64()==Some(chat)
+            {
+                cursor=mid;
+                offset = -99;
+                anchor_pending=true;
             }
         }
         Ok(Self{gateway,chat,chat_id:chat_id.into(),cursor,offset,anchor_pending,
@@ -61,7 +61,7 @@ impl<'a> HistoryReader<'a> {
             let list=raw["messages"].as_array().ok_or("Invalid history response")?;
             if self.anchor_pending {
                 self.anchor_pending=false;
-                let first=list.iter().filter(|v|!v.is_null()).next();
+                let first=list.iter().find(|v|!v.is_null());
                 // A date seek is trusted only when the returned window visibly
                 // crosses the requested upper boundary. Otherwise restart at
                 // HEAD, even if it costs more raw messages.

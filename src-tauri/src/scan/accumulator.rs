@@ -1,6 +1,7 @@
 //! Streaming Post assembler. TDLib messages arrive newest-first; an Album
 //! can span any number of pages without being silently split.
-use crate::core::{assemble, CompletenessLevel, LogicalPost, PostCompleteness, TelegramMessage,PostKind};
+use crate::core::{assemble,LogicalPost,TelegramMessage};
+use super::boundary::{classify,BoundaryEvidence};
 fn group_key(m:&TelegramMessage)->String {
     m.media_album_id.as_ref()
         .map(|album|format!("{}:a{album}",m.key.chat_id))
@@ -47,15 +48,11 @@ impl PostAccumulator {
         self.current_key=None;
         if messages.is_empty(){return None;}
         let mut post=assemble(&messages).into_iter().next()?;
-        post.completeness=if post.kind==PostKind::Single {
-            PostCompleteness{level:CompletenessLevel::Verified,reason:"single_message".into()}
-        } else if self.upper_edge_seen&&lower_edge_seen {
-            PostCompleteness{level:CompletenessLevel::Assumed,reason:"contiguous_boundaries_observed".into()}
-        } else {
-            PostCompleteness{level:CompletenessLevel::Unknown,reason:if lower_edge_seen {
-                "newer_boundary_not_observed"
-            } else {"older_boundary_not_observed"}.into()}
-        };
+        post.completeness=classify(&post.kind,BoundaryEvidence{
+            newer_edge:self.upper_edge_seen,
+            older_edge:lower_edge_seen,
+            known_missing_members:false,
+        });
         Some(post)
     }
 }

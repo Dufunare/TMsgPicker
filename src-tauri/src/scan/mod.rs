@@ -1,5 +1,6 @@
 //! Query coordination: history -> streaming Posts -> Post scope -> filter/rank.
 pub mod accumulator;
+pub mod boundary;
 pub mod history;
 pub mod scope;
 use accumulator::PostAccumulator;
@@ -49,9 +50,11 @@ pub fn scan_with_limits(
     let mut scope=ScopeController::new(&spec.scope);
     let mut eligible=Vec::<LogicalPost>::new();
     let mut finalized=0usize;
-    let mut status=ScanStatus::Running;
-    let mut reason=None::<StopReason>;
-    let mut detail=String::new();
+    // Every exit path assigns all three exactly once; no provisional scan
+    // status is mistaken for a terminal value.
+    let status:ScanStatus;
+    let reason:Option<StopReason>;
+    let detail:String;
     let started=Instant::now();
     let mut last_progress=None::<Instant>;
     let to_bound=match spec.scope { crate::core::Scope::Dates{to,..}=>Some(to), _=>None };
@@ -152,12 +155,10 @@ pub fn scan_with_limits(
     // Only offer a partial open group when the scan ended abnormally.
     // It stays Unknown (unless it is a single) and cannot be forwarded without
     // the explicit incomplete-Post confirmation.
-    if status!=ScanStatus::Complete {
-        if let Some(post)=assembler.finish(false) {
-            finalized+=1;
-            if matches!(scope.observe(&post),Decision::Include|Decision::IncludeAndStop){
-                eligible.push(post);
-            }
+    if status!=ScanStatus::Complete && let Some(post)=assembler.finish(false) {
+        finalized+=1;
+        if matches!(scope.observe(&post),Decision::Include|Decision::IncludeAndStop){
+            eligible.push(post);
         }
     }
     let covered=status==ScanStatus::Complete;
