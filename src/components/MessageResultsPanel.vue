@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import {computed,reactive,ref,watch} from 'vue';
+import {computed,nextTick,reactive,ref,watch} from 'vue';
 import {useWorkspaceContext} from '../useWorkspace';
 import LinkedText from './LinkedText.vue';
 import MediaPreview from './MediaPreview.vue';
 import {scanStatusLabel,scanReasonLabel,postCompletenessLabel,windowPartiallyCovered} from '../scan/scanUi';
+import {scrollResultsToTop} from '../theme/scrollMotion.ts';
 const {busy,error,chatList,selectedChat,activeResult:result,scanning,openPost,count,reactionLabel,date,profileId,connection}=useWorkspaceContext();
 const expanded=reactive<Record<string,boolean>>({});
+const resultsRoot=ref<HTMLElement|null>(null);
 // Fixed-size result pages keep mounted DOM and Vue patch work bounded even
 // when the requested output_limit is 1000. No new native results are fetched.
 const PAGE_SIZE=40;
@@ -18,16 +20,24 @@ watch([profileId,()=>selectedChat.value?.id,()=>result.value?.run_id],()=>{
   for(const key of Object.keys(expanded))delete expanded[key];
 });
 watch(pageCount,()=>{if(page.value>pageCount.value)page.value=pageCount.value;});
-function changePage(next:number){
-  if(next<1||next>pageCount.value)return;
+async function changePage(next:number){
+  if(next<1||next>pageCount.value||next===page.value)return;
   page.value=next;
   for(const key of Object.keys(expanded))delete expanded[key];
+  // Wait until the next page replaces the old Post cards, so the browser
+  // scrolls against the updated list height instead of a stale layout.
+  await nextTick();
+  // .middle-column is the actual scrollable pane (window itself cannot scroll).
+  const viewport=resultsRoot.value?.closest<HTMLElement>('.middle-column');
+  scrollResultsToTop(viewport,
+    document.documentElement.dataset.motion==='on',
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches);
 }
 const mediaKinds=new Set(['photo','video','animation','video_note','document','audio','voice_note','sticker']);
 function hasMedia(members:{content_kind:string}[]){return members.some(m=>mediaKinds.has(m.content_kind));}
 </script>
 <template>
-  <section class="results">
+  <section ref="resultsRoot" class="results">
     <div class="panel result-header">
       <p v-if="error" role="alert" class="error">{{error}}</p>
       <h2>{{selectedChat?.title??'Messages & Results'}} <span v-if="result" class="badge" :class="result.status">{{scanStatusLabel(result.status)}}</span></h2>
