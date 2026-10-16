@@ -46,7 +46,14 @@ const {apiId,apiHash,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,ap
 const chatList = field('chatList');
 const search = field('search');
 const chatScope = field('chatScope');
-const selectedChat = field('selectedChat');
+function selectChatFor(id:string,chat:Chat|null){
+  const runId=accountViews.selectChat(id,chat);
+  if(runId)void invokeCommand('cancel_query',{profileId:id,runId}).catch(()=>{
+    // UI ownership has already changed; cancellation is best effort.
+  });
+}
+function selectChat(chat:Chat|null){selectChatFor(profileId.value,chat);}
+const selectedChat = computed({get:()=>view.value.selectedChat,set:selectChat});
 const scopeKind = field('scopeKind');
 const rawCount = field('rawCount');
 const fromDate = field('fromDate');
@@ -60,6 +67,11 @@ const descending = field('descending');
 const outputLimit = field('outputLimit');
 const result = field('result');
 const currentRun = field('currentRun');
+const scanChatId = field('scanChatId');
+const activeResult = computed(()=>{
+  const v=view.value;
+  return v.scanChatId!==''&&v.scanChatId===v.selectedChat?.id&&v.result?.run_id===v.currentRun?v.result:null;
+});
 const scanning = field('scanning');
 const selected = field('selected');
 const target = field('target');
@@ -70,7 +82,7 @@ const preview = field('preview');
 const reportTarget = field('reportTarget');
 const uncertainSends = field('uncertainSends');
 const targetTitle = computed(() => chatList.value.find(c => c.id === target.value)?.title ?? '');
-const selectedMessageCount = computed(() => result.value?.posts.filter(p => selected.value.includes(p.key)).reduce((n,p) => n+p.members.length,0) ?? 0);
+const selectedMessageCount = computed(() => activeResult.value?.posts.filter(p => selected.value.includes(p.key)).reduce((n,p) => n+p.members.length,0) ?? 0);
 const authLabel = computed(() => ({ authorizationStateWaitPhoneNumber: '手机号（含国家代码）', authorizationStateWaitCode: 'Telegram 验证码', authorizationStateWaitPassword: '两步验证密码', authorizationStateWaitEmailAddress: '授权邮箱', authorizationStateWaitEmailCode: '邮箱验证码' } as Record<string,string>)[connection.value.auth_state]);
 const unlisteners: UnlistenFn[] = [];
 
@@ -129,6 +141,8 @@ async function fetchChats(id:string,v:AccountView){
     || v.search!==query || v.chatScope!==scope || statuses[id]?.generation!==generation)return;
   // Guard the presentation layer as well: public chat lookups don't define list ownership.
   v.chatList=chats.filter(chat=>scope==='all'||(scope==='archive'?chat.archived===true:chat.archived!==true));
+  const refreshed=v.chatList.find(chat=>chat.id===v.selectedChat?.id);
+  if(refreshed)selectChatFor(id,refreshed);
   v.chatError='';
 }
 function scheduleChats(attempt=0){
@@ -151,7 +165,7 @@ async function switchChatScope(scope:ChatScope){
   v.chatList=[]; // Do not show the previous list during a slow TDLib reload.
   await loadChats();
 }
-async function resolvePublic() {const id=profileId.value,v=view.value;await chatAction(async()=>{const c=await invokeCommand<Chat>('public_chat',{profileId:id,username:v.search});if(accountViews.views[id]!==v)return;if(v.chatScope==='all'||(v.chatScope==='archive'?c.archived===true:c.archived!==true)){if(!v.chatList.some(x=>x.id===c.id))v.chatList.unshift(c);}v.selectedChat=c;});}
+async function resolvePublic() {const id=profileId.value,v=view.value;await chatAction(async()=>{const c=await invokeCommand<Chat>('public_chat',{profileId:id,username:v.search});if(accountViews.views[id]!==v)return;if(v.chatScope==='all'||(v.chatScope==='archive'?c.archived===true:c.archived!==true)){if(!v.chatList.some(x=>x.id===c.id))v.chatList.unshift(c);}selectChatFor(id,c);});}
 async function savedMessages() {const id=profileId.value,v=view.value;await action(async()=>{const c=await invokeCommand<Chat>('saved_messages',{profileId:id});if(accountViews.views[id]!==v)return;if(!v.chatList.some(x=>x.id===c.id))v.chatList.push(c);v.target=c.id;v.confirmation=false;v.confirmedSelection=null;});}
 async function runQuery() {
   const id=profileId.value,v=view.value;
@@ -159,20 +173,31 @@ async function runQuery() {
   const from=Date.parse(v.fromDate)/1000,to=Date.parse(v.toDate)/1000;
   if(v.scopeKind==='dates'&&(!Number.isFinite(from)||!Number.isFinite(to)||from>=to)){v.error='请输入有效的开始／结束日期';return;}
   const spec:QuerySpec={version:2,chat_id:v.selectedChat.id,scope:v.scopeKind==='recent'?{kind:'recent',count:v.rawCount}:{kind:'dates',from:Math.floor(from),to:Math.floor(to),limit_posts:v.scanAllDates?null:v.datePostLimit},filter:v.filter,sort:[{field:{kind:v.sortField,...(v.sortField==='reaction'?{emoji:v.sortEmoji}:{})},descending:v.descending}],output_limit:v.outputLimit};
-  const runId=crypto.randomUUID();v.currentRun=runId;v.scanning=true;v.selected=[];v.confirmation=false;v.report=null;v.confirmedSelection=null;
+  const runId=crypto.randomUUID();v.currentRun=runId;v.scanChatId=spec.chat_id;v.scanning=true;
+  v.selected=[];v.confirmation=false;v.preview=null;v.confirmedSelection=null;
   v.result={run_id:runId,status:'Running',stop_reason:null,scope:spec.scope,
     coverage:{requested_posts:spec.scope.kind==='recent'?spec.scope.count:spec.scope.limit_posts,examined_posts:0,scope_complete:false,date_window_exhausted:null},
     stats:{raw_messages_read:0,posts_finalized:0,posts_matched:0,posts_returned:0,pages:0},
     scanned:0,pages:0,exact:false,detail:'正在读取历史',posts:[]};
-  try{await invokeCommand('start_query',{profileId:id,spec,runId});}catch(e){if(v.currentRun===runId){v.scanning=false;v.error=String(e);v.result={...v.result!,status:'Error',detail:String(e)};}}
+  try{await invokeCommand('start_query',{profileId:id,spec,runId});}catch(e){if(v.currentRun===runId&&v.scanChatId===v.selectedChat?.id){v.scanning=false;v.error=String(e);v.result={...v.result!,status:'Error',detail:String(e)};}}
 }
-async function cancelQuery(){const id=profileId.value,runId=currentRun.value;await action(async()=>{await invokeCommand('cancel_query',{profileId:id,runId});});}
-async function openPost(post:Post){const id=profileId.value;await action(async()=>{const url=await invokeCommand<string>('message_link',{profileId:id,key:post.representative,album:post.kind==='album'});await openUrl(url);});}
+async function queryAction(fn:(id:string,runId:string)=>Promise<void>){
+  const id=profileId.value,v=view.value,runId=v.currentRun,chatId=v.scanChatId;
+  v.error='';v.busy=true;
+  try{await fn(id,runId);}
+  catch(e){if(v.currentRun===runId&&v.scanChatId===chatId&&chatId===v.selectedChat?.id)v.error=String(e);}
+  finally{v.busy=false;}
+}
+async function cancelQuery(){await queryAction(async(id,runId)=>{await invokeCommand('cancel_query',{profileId:id,runId});});}
+async function openPost(post:Post){
+  if(!activeResult.value?.posts.some(current=>current.key===post.key&&current.representative.chat_id===post.representative.chat_id))return;
+  await queryAction(async(id)=>{const url=await invokeCommand<string>('message_link',{profileId:id,key:post.representative,album:post.kind==='album'});await openUrl(url);});
+}
 async function prepareForward(){
   const id=profileId.value,v=view.value;
   // Capture the entire selection before any asynchronous confirmation; a
   // later account switch or rerun must invalidate, not retarget, this action.
-  const selection={target:v.target,keys:[...v.selected],runId:v.currentRun,allowIncomplete:false};
+  const selection={chatId:v.selectedChat?.id??'',target:v.target,keys:[...v.selected],runId:v.currentRun,allowIncomplete:false};
   const selectedPosts=v.result?.posts.filter(p=>selection.keys.includes(p.key))??[];
   const incomplete=selectedPosts.filter(p=>p.completeness.level==='Unknown'||p.completeness.level==='Truncated');
   if(needsIncompleteConfirmation(selectedPosts)) {
@@ -182,19 +207,26 @@ async function prepareForward(){
     selection.allowIncomplete=true;
   }
   const stillCurrent=()=>profileId.value===id&&accountViews.views[id]===v
+    &&!!selection.chatId&&selection.chatId===v.selectedChat?.id&&selection.chatId===v.scanChatId
+    &&v.result?.run_id===selection.runId&&!v.scanning&&selection.keys.length>0
     &&selection.target===v.target&&selection.runId===v.currentRun
     &&selection.keys.join('|')===v.selected.join('|');
-  if(!stillCurrent()){v.error='账号或选择已变化，请重新准备转发';return;}
+  if(!stillCurrent()){
+    if(profileId.value===id&&v.selectedChat?.id===selection.chatId)v.error='账号或选择已变化，请重新准备转发';
+    return;
+  }
   v.busy=true;v.error='';
   try {
     const report=await invokeCommand<ForwardReport>('preview_forward',{profileId:id,
       target:selection.target,postKeys:selection.keys,runId:selection.runId,allowIncomplete:selection.allowIncomplete});
     if(!stillCurrent())return;
     v.preview=report;v.confirmedSelection=selection;v.confirmation=true;
-  }catch(e){v.error=String(e);}finally{v.busy=false;}
+  }catch(e){if(stillCurrent())v.error=String(e);}finally{v.busy=false;}
 }
 async function forward(){
-  const id=profileId.value,v=view.value,selection=v.confirmedSelection;if(!selection)return;
+  const id=profileId.value,v=view.value,selection=v.confirmedSelection;
+  if(!selection||!v.selectedChat||selection.chatId!==v.selectedChat.id||v.scanChatId!==selection.chatId||selection.runId!==v.currentRun
+    ||v.result?.run_id!==selection.runId||v.scanning||selection.keys.join('|')!==v.selected.join('|'))return;
   v.forwarding=true;v.error='';
   try{
     v.reportTarget=selection.target;
@@ -203,7 +235,7 @@ async function forward(){
     v.report=report;
     for(const item of report.items)if(item.sent_id){const state=v.sendUpdates[`${selection.target}:${item.sent_id}`];if(state)item.state=state;}
     v.confirmation=false;
-  }catch(e){v.error=String(e);}finally{v.forwarding=false;}
+  }catch(e){if(v.currentRun===selection.runId&&v.scanChatId===v.selectedChat?.id)v.error=String(e);}finally{v.forwarding=false;}
 }
 function count(v: number | null | undefined) {return v == null ? '—' : v.toLocaleString();}
 function reactionLabel(key: {kind:string;value?:string}) {return key.kind==='emoji'?key.value:key.kind==='custom_emoji'?`自定义 Emoji ${key.value}`:key.kind==='paid'?'付费反应':`其他反应 ${key.value ?? ''}`;}
@@ -236,7 +268,7 @@ onMounted(async () => {
 });
 onUnmounted(()=>{unlisteners.forEach(fn=>fn());clearTimeout(chatTimer);clearAvatars();answerDialog(null);});
 
-return { settingsTargetReady,targetError,accountProfile,refreshSettings,dialog,answerDialog,chatScope,switchChatScope,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,datePostLimit,scanAllDates,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetReport,resetBusy,resetLayout,resizeLayout };
+return { settingsTargetReady,targetError,accountProfile,refreshSettings,dialog,answerDialog,chatScope,switchChatScope,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,selectChat,scopeKind,rawCount,fromDate,toDate,datePostLimit,scanAllDates,filter,sortField,sortEmoji,descending,outputLimit,result,activeResult,currentRun,scanChatId,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetReport,resetBusy,resetLayout,resizeLayout };
 }
 export type Workspace = ReturnType<typeof useWorkspace>;
 export const workspaceKey=Symbol("workspace");

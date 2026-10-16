@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import {reactive} from 'vue';
+import {reactive,watch} from 'vue';
 import {useWorkspaceContext} from '../useWorkspace';
 import LinkedText from './LinkedText.vue';
 import MediaPreview from './MediaPreview.vue';
 import {scanStatusLabel,scanReasonLabel,postCompletenessLabel,windowPartiallyCovered} from '../scan/scanUi';
-const {busy,error,chatList,selectedChat,result,scanning,openPost,count,reactionLabel,date,profileId,connection}=useWorkspaceContext();
+const {busy,error,chatList,selectedChat,activeResult:result,scanning,openPost,count,reactionLabel,date,profileId,connection}=useWorkspaceContext();
 const expanded=reactive<Record<string,boolean>>({});
+watch([profileId,()=>selectedChat.value?.id,()=>result.value?.run_id],()=>{
+  for(const key of Object.keys(expanded))delete expanded[key];
+});
 const mediaKinds=new Set(['photo','video','animation','video_note','document','audio','voice_note','sticker']);
 function hasMedia(members:{content_kind:string}[]){return members.some(m=>mediaKinds.has(m.content_kind));}
 </script>
@@ -18,7 +21,8 @@ function hasMedia(members:{content_kind:string}[]){return members.some(m=>mediaK
       <p v-if="result&&windowPartiallyCovered(result)" class="muted">已达到日期范围内指定的 Post 数量；没有遍历整个日期范围。</p>
       <p v-if="result?.status==='BudgetExceeded'||result?.status==='Interrupted'||result?.status==='Error'" class="muted" role="status">{{scanReasonLabel(result.stop_reason)}} · {{result.detail}}</p>
     </div>
-    <div v-if="result&&!result.posts.length" class="panel empty">{{scanning?'正在读取历史…':'当前范围没有匹配帖子'}}</div>
+    <div v-if="!result" class="panel empty">{{selectedChat?'请在右侧 Query Builder 执行查询':'请先选择聊天'}}</div>
+    <div v-else-if="!result.posts.length" class="panel empty">{{scanning?'正在读取历史…':'当前范围没有匹配帖子'}}</div>
     <article v-for="post in result?.posts??[]" :key="post.key" class="panel post">
       <div class="post-top"><strong>{{chatList.find(c=>c.id===post.representative.chat_id)?.title??selectedChat?.title??'Telegram'}}</strong><button :disabled="busy" @click="openPost(post)">查看原文 ↗</button></div>
       <p class="muted">{{date(post.date)}} · {{post.kind==='album'?'媒体组':'消息'}}<span v-if="post.completeness.level!=='Verified'" class="post-completeness" :title="post.completeness.reason"> · {{postCompletenessLabel(post.completeness.level)}}</span></p>

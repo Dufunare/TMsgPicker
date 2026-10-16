@@ -7,11 +7,11 @@ export function emptyView() {
     scopeKind: 'recent', rawCount: 50, fromDate: '', toDate: '', datePostLimit: 5000, scanAllDates: false,
     filter: { kind: 'and', items: [] } as Filter, sortField: 'views' as FieldName,
     sortEmoji: '👍', descending: true, outputLimit: 20,
-    result: null as ScanResult | null, currentRun: '', scanning: false, selected: [] as string[],
+    result: null as ScanResult | null, currentRun: '', scanChatId: '', scanning: false, selected: [] as string[],
     target: '', confirmation: false, forwarding: false, report: null as ForwardReport | null,
     preview: null as ForwardReport | null, reportTarget: '',
     uncertainSends: [] as UnknownSend[],
-    confirmedSelection: null as { target: string; keys: string[]; runId: string; allowIncomplete?: boolean } | null,
+    confirmedSelection: null as { chatId: string; target: string; keys: string[]; runId: string; allowIncomplete?: boolean } | null,
     sendUpdates: {} as Record<string, string>, error: '', chatError: '', accountError: '', notice: '', busy: false,
   };
 }
@@ -21,6 +21,16 @@ export function createAccountViews() {
   const statuses = reactive<Record<string, Connection>>({});
   function get(id: string) { return views[id] ?? (views[id] = emptyView()); }
   function reset(id: string) { const uncertainSends=get(id).uncertainSends;views[id]={...emptyView(),uncertainSends}; }
+  function selectChat(id: string, chat: Chat | null) {
+    const view=get(id);
+    if(view.selectedChat?.id===chat?.id){view.selectedChat=chat;return null;}
+    const cancelRun=view.scanning?view.currentRun:null;
+    view.currentRun='';view.scanChatId='';view.scanning=false;view.result=null;
+    view.selected=[];view.confirmation=false;view.confirmedSelection=null;view.preview=null;
+    view.error='';
+    view.selectedChat=chat;
+    return cancelRun;
+  }
   function connection(event: Connection) {
     const id = event.profile_id;
     if (!id || event.generation < (statuses[id]?.generation ?? 0)) return false;
@@ -30,7 +40,8 @@ export function createAccountViews() {
   }
   function progress(event: { profile_id: string; generation: number; result: ScanResult }) {
     const view = get(event.profile_id);
-    if (event.generation !== statuses[event.profile_id]?.generation || event.result.run_id !== view.currentRun) return;
+    if (event.generation !== statuses[event.profile_id]?.generation || event.result.run_id !== view.currentRun
+      || !view.scanChatId || view.scanChatId !== view.selectedChat?.id) return;
     view.result = event.result;
     view.scanning = event.result.status === 'Running';
     view.selected = view.selected.filter(key => event.result.posts.some(p => p.key === key));
@@ -46,7 +57,7 @@ export function createAccountViews() {
       if (item.sent_id === event.old_message_id) item.state = event.state;
     }
   }
-  return { views, statuses, get, reset, connection, progress, sent };
+  return { views, statuses, get, reset, selectChat, connection, progress, sent };
 }
 
 export function accountStatus(connection?: Connection) {

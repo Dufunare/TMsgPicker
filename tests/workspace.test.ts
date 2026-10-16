@@ -14,7 +14,10 @@ const scan = (run_id: string, scanned: number) => ({run_id,scanned,status:'Compl
 test('background query and send updates belong to the profile, even with identical run and message IDs', () => {
   const state=createAccountViews();
   state.connection(status('A'));state.connection(status('B'));
+  state.selectChat('A',{id:'1',title:'A chat',kind:'group'});
+  state.selectChat('B',{id:'2',title:'B chat',kind:'group'});
   state.get('A').currentRun='same';state.get('B').currentRun='same';
+  state.get('A').scanChatId='1';state.get('B').scanChatId='2';
   state.progress({profile_id:'A',generation:1,result:scan('same',17)});
   assert.equal(state.get('A').result?.scanned,17);assert.equal(state.get('B').result,null);
   for(const id of ['A','B']){
@@ -164,7 +167,8 @@ test('incomplete Post confirmation cannot preview an old account after switching
     w=useWorkspace(false,transport as Parameters<typeof useWorkspace>[1]);
     return()=>h('div');
   }});app.mount({});
-  w.profileId.value='A';w.currentRun.value='test-run';w.target.value='-1002';w.selected.value=['p'];
+  w.profileId.value='A';w.selectChat({id:'1',title:'A chat',kind:'group'});
+  w.currentRun.value='test-run';w.scanChatId.value='1';w.target.value='-1002';w.selected.value=['p'];
   w.result.value={
     run_id:'test-run',status:'Complete',stop_reason:'PostLimitReached',detail:'',
     scope:{kind:'recent',count:1},
