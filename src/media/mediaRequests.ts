@@ -23,5 +23,9 @@ export function requestMedia(
 ):Promise<string|null>{
   return scheduler.request(profileId,generation,fileId,full,options);
 }
+/** Read a completed image without scheduling any new IPC work. */
+export function cachedMedia(profileId:string,generation:number,fileId:number,full:boolean):string|null {
+  return scheduler.peek(profileId,generation,fileId,full);
+}
 export function clearMediaRequests(profileId?:string){scheduler.clear(profileId);}
 export function mediaCacheStats(){return scheduler.stats();}
