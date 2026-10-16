@@ -4,7 +4,10 @@ import { createRenderer, h } from 'vue';
 import { createAccountViews } from '../src/accountViews.ts';
 import { useWorkspace } from '../src/useWorkspace.ts';
 import {createSSRApp} from 'vue';
+import type {SettingsSnapshot} from '../src/types.ts';
 import {renderToString} from 'vue/server-renderer';
+
+const fixture:SettingsSnapshot={settings:{schema_version:1,api_id:12,proxy_enabled:false,proxy_server:'localhost',proxy_port:1080,proxy_username:''},profiles:['A','B'].map(id=>({profile_id:id,telegram_user_id:id,display_name:id,username:null,is_legacy_profile:false,session_directory_id:id,created_at:1,last_used_at:0,has_saved_database_secret:false,logout_pending:false})),primary_profile_id:'A',interrupted_profiles:[],debug_tools:true,has_saved_api_hash:true,has_saved_proxy_password:false};
 
 const status = (id: string, generation=1) => ({profile_id:id,generation,runtime_state:'Ready',auth_state:'authorizationStateReady',connection_state:'connectionStateReady',detail:'',user_disconnected:false});
 const scan = (run_id: string, scanned: number) => ({run_id,scanned,status:'Complete' as const,pages:1,exact:true,detail:'',posts:[]});
@@ -88,7 +91,7 @@ test('pending disconnect cancellation leaves client alone and confirmation passe
   const calls:Array<{command:string;args:unknown}>=[];
   let w!:ReturnType<typeof useWorkspace>;
   const transport=async(command:string,args:unknown)=>{calls.push({command,args});if(command==='close_guard')return {pending_count:1,retry_after_ms:0,token:'reviewed'};};
-  const app=renderer.createApp({setup(){w=useWorkspace(false,transport as Parameters<typeof useWorkspace>[1],(async()=>{}) as Parameters<typeof useWorkspace>[2]);return()=>h('div');}});app.mount({});w.profileId.value='A';
+  const app=renderer.createApp({setup(){w=useWorkspace(false,transport as Parameters<typeof useWorkspace>[1],(async()=>{}) as Parameters<typeof useWorkspace>[2]);return()=>h('div');}});app.mount({});w.profileId.value='A';w.snapshot.value=fixture;
   const cancelled=w.disconnect();await new Promise(resolve=>setImmediate(resolve));assert.match(w.dialog.value?.text??'',/Unknown/);w.answerDialog(null);await cancelled;
   assert.deepEqual(calls.map(c=>c.command),['close_guard']);
   const confirmed=w.disconnect();await new Promise(resolve=>setImmediate(resolve));w.answerDialog({text:'',deleteData:false});await confirmed;
@@ -112,13 +115,13 @@ test('add uses a dedicated login service, settings carry explicit IDs and draggi
   await w.addAccount();assert.equal(w.profileId.value,'');
   await w.openSettings();w.profileId.value='A';await w.openAccountSettings();
   w.resizeLayout(.3,.4);assert.equal(w.leftRatio.value,.3);w.resetLayout();assert.equal(w.leftRatio.value,.23);assert.equal(w.rightRatio.value,.29);
-  assert.deepEqual(calls,[{command:'open_login',args:undefined},{command:'open_settings',args:{profileId:null}},{command:'open_settings',args:{profileId:'A'}}]);
+  assert.deepEqual(calls,[{command:'open_login',args:undefined},{command:'open_settings',args:{tab:'application',profileId:null}},{command:'open_settings',args:{tab:'account',profileId:'A'}}]);
 });
 test('bound account settings target remains A while another window switches its active view to B',async()=>{
   const calls:Array<{command:string;args:unknown}>=[];let account!:ReturnType<typeof useWorkspace>,main!:ReturnType<typeof useWorkspace>;
   const transport=async(command:string,args:unknown)=>{calls.push({command,args});if(command==='close_guard')return {pending_count:0,retry_after_ms:0,token:null};};
   await renderToString(createSSRApp({setup(){account=useWorkspace(true,transport as Parameters<typeof useWorkspace>[1],(async()=>{}) as Parameters<typeof useWorkspace>[2]);main=useWorkspace(false,transport as Parameters<typeof useWorkspace>[1]);return()=>h('div');}}));
-  account.profileId.value='A';main.profileId.value='B';await main.selectAccount();
+  account.snapshot.value=fixture;account.settingsTargetReady.value=true;account.profileId.value='A';main.profileId.value='B';await main.selectAccount();
   await account.disconnect();
   assert.equal(account.profileId.value,'A');assert.deepEqual(calls.at(-1),{command:'disconnect',args:{profileId:'A',closeConfirmation:null}});
 });

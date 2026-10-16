@@ -3,8 +3,7 @@ import {computed} from 'vue';
 import {useWorkspaceContext} from '../useWorkspace';
 import {accountStatus} from '../accountViews';
 import AvatarPreview from './AvatarPreview.vue';
-const {snapshot,profileId,connection,accountError,notice,busy,passphrase,authLabel,authValue,connect,submitAuth,disconnect,logoutAccount,addAccount}=useWorkspaceContext();
-const profile=computed(()=>snapshot.value?.profiles.find(p=>p.profile_id===profileId.value));
+const {accountProfile:profile,targetError,snapshot,profileId,connection,accountError,notice,busy,passphrase,authLabel,authValue,connect,submitAuth,disconnect,logoutAccount,addAccount}=useWorkspaceContext();
 const needsPassword=computed(()=>connection.value.runtime_state==='NeedsDatabasePassphrase'||(connection.value.user_disconnected&&!profile.value?.has_saved_database_secret)||connection.value.runtime_state==='Error');
 </script>
 <template>
@@ -15,7 +14,7 @@ const needsPassword=computed(()=>connection.value.runtime_state==='NeedsDatabase
       <div class="account-info-details">
         <h3 id="account-info-title">账号信息</h3>
         <template v-if="!profile">
-          <p class="muted">{{snapshot?.profiles.length?'请选择要设置的账号。':'尚未添加 Telegram 账号。'}}</p>
+          <p class="muted" :role="profileId?'alert':undefined">{{targetError||(snapshot?.profiles.length?'请选择要设置的账号。':'尚未添加 Telegram 账号。')}}</p>
           <button @click="addAccount">添加新账号</button>
         </template>
         <template v-else>

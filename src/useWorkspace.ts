@@ -11,6 +11,18 @@ import { createAccountViews, type AccountView } from './accountViews.ts';
 
 export function useWorkspace(settingsView = false, invokeCommand: typeof invoke = invoke, emitEvent: typeof emit = emit) {
 const snapshot=ref<SettingsSnapshot|null>(null), profileId=ref(''), rememberDatabase=ref(false), leftRatio=ref(.23), rightRatio=ref(.29);
+// Settings bind only after an explicit navigation target, never to Primary.
+const settingsTargetReady=ref(!settingsView);
+const targetError=computed(()=>{
+  if(!settingsTargetReady.value||!snapshot.value)return '正在加载设置目标账号…';
+  if(!profileId.value)return snapshot.value.profiles.length?'请选择要设置的账号。':'尚未添加 Telegram 账号。';
+  if(!snapshot.value.profiles.some(p=>p.profile_id===profileId.value))return '目标账号已不存在，请从主窗口重新选择账号并打开设置。';
+  return '';
+});
+const accountProfile=computed(()=>targetError.value?undefined:snapshot.value?.profiles.find(p=>p.profile_id===profileId.value));
+function requireAccount(id:string){
+  if(!settingsTargetReady.value||!snapshot.value||!id||!snapshot.value.profiles.some(p=>p.profile_id===id))throw new Error('目标账号无效或已不存在，请重新选择账号。');
+}
 const accountViews = createAccountViews();
 const statuses = accountViews.statuses;
 const view = computed(() => accountViews.get(profileId.value));
@@ -62,7 +74,8 @@ const unlisteners: UnlistenFn[] = [];
 
 async function action(fn: () => Promise<void>) { const v=view.value;v.error='';v.busy=true;try{await fn();}catch(e){v.error=String(e);}finally{v.busy=false;} }
 function clearSession(id=profileId.value) { chatRevisions.set(id,(chatRevisions.get(id)??0)+1);clearAvatars(id);accountViews.reset(id);if(id===profileId.value){sessionToken++;authValue.value='';} }
-async function accountAction(fn:()=>Promise<void|boolean>){const id=profileId.value,v=view.value;v.accountError='';v.busy=true;try{const changed=await fn();if(changed!==false)await emitEvent('workspace-settings-changed',{source:settingsView?'settings':'main'});}catch(e){accountViews.get(id).accountError=String(e);}finally{v.busy=false;}}
+async function accountAction(fn:()=>Promise<void|boolean>,id=profileId.value){const v=accountViews.get(id);v.accountError='';v.busy=true;try{const changed=await fn();if(changed!==false)await emitEvent('workspace-settings-changed',{source:settingsView?'settings':'main'});}catch(e){accountViews.get(id).accountError=String(e);}finally{v.busy=false;}}
+async function targetedAccountAction(id:string,fn:()=>Promise<void|boolean>){await accountAction(async()=>{requireAccount(id);return fn();},id);}
 async function refreshSettings(){snapshot.value=await invokeCommand<SettingsSnapshot>('app_settings');if(!settingsView&&!snapshot.value.profiles.some(p=>p.profile_id===profileId.value))profileId.value=snapshot.value.primary_profile_id??'';const states=await invokeCommand<Connection[]>('account_statuses');states.forEach(accountViews.connection);const unknown=await invokeCommand<UnknownSend[]>('unknown_sends');unknown.forEach(accountViews.sent);}
 async function confirmPendingClose(profileId:string|null, initial?:CloseChallenge,logout=false):Promise<string|null|undefined>{
   const challenge=initial??await invokeCommand<CloseChallenge>('close_guard',{profileId});
@@ -78,11 +91,11 @@ async function connect() {
   if(!id){accountError.value='请添加或选择账号';return;}
   const config={profile_id:id,passphrase:passphrase.value||null,remember_database:rememberDatabase.value};
   passphrase.value='';
-  await accountAction(async()=>{await invokeCommand('connect',{config});await refreshSettings();});
+  await targetedAccountAction(id,async()=>{await invokeCommand('connect',{config});await refreshSettings();});
   if(profileId.value===id&&!settingsView&&ready.value)scheduleChats();
 }
-async function submitAuth(){const id=profileId.value;const value=authValue.value;authValue.value='';await accountAction(async()=>{await invokeCommand('auth_submit',{profileId:id,value});});}
-async function disconnect(){const id=profileId.value;await accountAction(async()=>{const closeConfirmation=await confirmPendingClose(id);if(closeConfirmation===undefined)return false;await invokeCommand('disconnect',{profileId:id,closeConfirmation});clearSession(id);});}
+async function submitAuth(){const id=profileId.value;const value=authValue.value;authValue.value='';await targetedAccountAction(id,async()=>{await invokeCommand('auth_submit',{profileId:id,value});});}
+async function disconnect(){const id=profileId.value;await targetedAccountAction(id,async()=>{const closeConfirmation=await confirmPendingClose(id);if(closeConfirmation===undefined)return false;requireAccount(id);await invokeCommand('disconnect',{profileId:id,closeConfirmation});clearSession(id);});}
 async function addAccount(){try{await invokeCommand('open_login');}catch(e){accountError.value=String(e);}}
 async function selectAccount(_activate=false){
   sessionToken++; clearTimeout(chatTimer); passphrase.value='';authValue.value='';
@@ -90,10 +103,17 @@ async function selectAccount(_activate=false){
   if(profileId.value&&!settingsView)await invokeCommand('select_profile',{profileId:profileId.value});
   if(ready.value&&!settingsView&&!chatList.value.length)scheduleChats();
 }
-async function openSettings(){try{await invokeCommand('open_settings',{profileId:null});}catch(e){accountError.value=String(e);}}
-async function openAccountSettings(){const id=profileId.value;if(!id)return;try{await invokeCommand('open_settings',{profileId:id});}catch(e){accountError.value=String(e);}}
+async function openSettings(){const id=profileId.value;try{await invokeCommand('open_settings',{tab:'application',profileId:id||null});}catch(e){accountViews.get(id).accountError=String(e);}}
+async function openAccountSettings(){const id=profileId.value;if(!id)return;try{await invokeCommand('open_settings',{tab:'account',profileId:id});}catch(e){accountViews.get(id).accountError=String(e);}}
 async function connectFromCard(){if(rememberDatabase.value)await connect();else await openAccountSettings();}
-async function logoutAccount(){const id=profileId.value;const profile=snapshot.value?.profiles.find(p=>p.profile_id===id);if(!id||!await askDialog({title:'注销账号',text:`注销「${profile?.display_name}」的 Telegram 授权，并永久清除该账号的本地 Session、文件和保存的数据库口令？其他账号保持运行。`}))return;await accountAction(async()=>{await invokeCommand('logout_account',{profileId:id,confirmed:true});clearSession(id);await refreshSettings();});}
+async function logoutAccount(){
+  const id=profileId.value,profile=accountProfile.value;
+  await targetedAccountAction(id,async()=>{
+    if(!await askDialog({title:'注销账号',text:`注销「${profile?.display_name}」的 Telegram 授权，并永久清除此账号的本地 Session、文件和保存的数据库口令？其他账号保持运行。`}))return false;
+    requireAccount(id);
+    await invokeCommand('logout_account',{profileId:id,confirmed:true});clearSession(id);await refreshSettings();
+  });
+}
 function resizeLayout(left:number,right:number){leftRatio.value=left;rightRatio.value=right;}
 function resetLayout(){resizeLayout(.23,.29);}
 async function chatAction(fn:()=>Promise<void>){const v=view.value;v.chatError='';v.busy=true;try{await fn();}catch(e){v.chatError=String(e);}finally{v.busy=false;}}
@@ -189,12 +209,12 @@ onMounted(async () => {
     if(!settingsView)unlisteners.push(await listen<string>('login-completed',async e=>{try{await refreshSettings();if(snapshot.value?.profiles.some(p=>p.profile_id===e.payload)){profileId.value=e.payload;await selectAccount();scheduleChats();}}catch(e){accountError.value=String(e);}}));
     unlisteners.push(await listen<{profile_id:string;detail:string}>('account-notice',e=>{accountViews.get(e.payload.profile_id).notice=e.payload.detail;}));
     unlisteners.push(await listen<{profile_id:string;target:string;old_message_id:string;state:string;generation:number}>('forward-update',e=>accountViews.sent(e.payload)));
-    await refreshSettings();applySettings();const requested=settingsView?new URLSearchParams(window.location.search).get('profile'):null;profileId.value=settingsView?(requested??(profileId.value||snapshot.value?.primary_profile_id||snapshot.value?.profiles[0]?.profile_id||'')):(snapshot.value?.primary_profile_id??snapshot.value?.profiles[0]?.profile_id??'');await selectAccount();if(ready.value&&!settingsView)void loadChats();
+    await refreshSettings();applySettings();if(!settingsView)profileId.value=snapshot.value?.primary_profile_id??snapshot.value?.profiles[0]?.profile_id??'';await selectAccount();if(ready.value&&!settingsView)void loadChats();
   } catch(e) {accountError.value=String(e);}
 });
 onUnmounted(()=>{unlisteners.forEach(fn=>fn());clearTimeout(chatTimer);clearAvatars();answerDialog(null);});
 
-return { dialog,answerDialog,chatScope,switchChatScope,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetReport,resetBusy,resetLayout,resizeLayout };
+return { settingsTargetReady,targetError,accountProfile,refreshSettings,dialog,answerDialog,chatScope,switchChatScope,connection,statuses,ready,busy,error,accountError,chatError,notice,apiId,apiHash,passphrase,proxyEnabled,proxyHost,proxyPort,proxyUser,proxyPassword,authValue,chatList,search,selectedChat,scopeKind,rawCount,fromDate,toDate,budget,filter,sortField,sortEmoji,descending,outputLimit,result,currentRun,scanning,selected,target,confirmation,forwarding,report,preview,reportTarget,uncertainSends,targetTitle,selectedMessageCount,authLabel,connect,submitAuth,disconnect,loadChats,resolvePublic,savedMessages,runQuery,cancelQuery,openPost,prepareForward,forward,count,reactionLabel,date,snapshot,profileId,openSettings,openAccountSettings,connectFromCard,leftRatio,rightRatio,addAccount,selectAccount,logoutAccount,saveSettings,clearSecret,debugReset,resetReport,resetBusy,resetLayout,resizeLayout };
 }
 export type Workspace = ReturnType<typeof useWorkspace>;
 export const workspaceKey=Symbol("workspace");
