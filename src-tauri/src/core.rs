@@ -344,7 +344,7 @@ pub fn field_value(p: &LogicalPost, f: &Field) -> Option<Scalar> {
         // An absent emoji in an available reactions object is known zero; missing object is Unknown.
         Field::Reaction(e) => m.reactions.as_ref().map(|rs| {
             rs.iter()
-                .find(|r| r.key == ReactionKey::Emoji(e.clone()))
+                .find(|r| matches!(&r.key, ReactionKey::Emoji(value) if value == e))
                 .map_or(0, |r| r.count)
         }),
     };
@@ -487,37 +487,36 @@ impl QuerySpec {
 pub fn query(messages: &[TelegramMessage], spec: &QuerySpec) -> Vec<LogicalPost> {
     query_posts(&assemble(messages),spec)
 }
-pub fn query_posts(input:&[LogicalPost],spec:&QuerySpec)->Vec<LogicalPost> {
-    let mut posts: Vec<_> = input.iter()
-        .filter(|p| evaluate(p, &spec.filter) == Truth::True)
-        .cloned()
-        .collect();
-    posts.sort_by(|a, b| {
-        for s in &spec.sort {
-            let cmp = match (field_value(a, &s.field), field_value(b, &s.field)) {
-                (None, None) => Ordering::Equal,
-                (None, Some(_)) => Ordering::Greater,
-                (Some(_), None) => Ordering::Less,
-                (Some(x), Some(y)) => {
-                    let c = scalar_cmp(&x, &y).unwrap_or(Ordering::Equal);
-                    if s.descending { c.reverse() } else { c }
-                }
-            };
-            if !cmp.is_eq() {
-                return cmp;
+/// Ordering shared by the full-sort API and the streaming bounded Top-K index.
+/// Less means the left Post ranks higher; null fields always rank last.
+pub fn compare_posts(a:&LogicalPost,b:&LogicalPost,sort:&[SortSpec])->Ordering {
+    for s in sort {
+        let cmp=match (field_value(a,&s.field),field_value(b,&s.field)) {
+            (None,None)=>Ordering::Equal,
+            (None,Some(_))=>Ordering::Greater,
+            (Some(_),None)=>Ordering::Less,
+            (Some(x),Some(y))=>{
+                let c=scalar_cmp(&x,&y).unwrap_or(Ordering::Equal);
+                if s.descending {c.reverse()} else {c}
             }
-        }
-        (
-            a.date,
-            id(&a.representative.chat_id).unwrap_or(0),
-            id(&a.representative.message_id).unwrap_or(0),
-        )
-            .cmp(&(
-                b.date,
-                id(&b.representative.chat_id).unwrap_or(0),
-                id(&b.representative.message_id).unwrap_or(0),
-            ))
-    });
+        };
+        if !cmp.is_eq(){return cmp;}
+    }
+    (
+        a.date,
+        id(&a.representative.chat_id).unwrap_or(0),
+        id(&a.representative.message_id).unwrap_or(0),
+    ).cmp(&(
+        b.date,
+        id(&b.representative.chat_id).unwrap_or(0),
+        id(&b.representative.message_id).unwrap_or(0),
+    ))
+}
+pub fn query_posts(input:&[LogicalPost],spec:&QuerySpec)->Vec<LogicalPost> {
+    let mut posts:Vec<_>=input.iter()
+        .filter(|p|evaluate(p,&spec.filter)==Truth::True)
+        .cloned().collect();
+    posts.sort_by(|a,b|compare_posts(a,b,&spec.sort));
     posts.truncate(spec.output_limit);
     posts
 }

@@ -340,6 +340,26 @@ fn selection(s: &AccountRuntime, run_id: &str, post_keys: &[String], allow_incom
     }
     Ok(keys)
 }
+/// Invalidate one run and release its retained ranking without touching the
+/// TDLib Session or any send receipts. Lock order matches start_query/publish:
+/// active first, then results, so a late event cannot resurrect freed Posts.
+fn release_result(s:&AccountRuntime,run_id:&str){
+    // Keep the active -> results lock ordering used by start_query/publish,
+    // but destroy potentially large Post trees *after* both locks are released.
+    let abandoned={
+        let mut active=s.active.lock().unwrap();
+        if active.as_ref().is_some_and(|(id,_)|id==run_id)
+            && let Some((_,cancel))=active.take()
+        {
+            cancel.store(true,Ordering::Relaxed);
+        }
+        let mut results=s.results.lock().unwrap();
+        if results.as_ref().is_some_and(|result|result.run_id==run_id){
+            results.take()
+        }else{None}
+    };
+    drop(abandoned);
+}
 fn retain_result(s: &AccountRuntime, result: &ScanResult, epoch: u64) -> bool {
     let active = s.active.lock().unwrap();
     if !current_epoch(s, epoch) || active.as_ref().map(|(id, _)| id) != Some(&result.run_id) {
@@ -1337,81 +1357,81 @@ async fn saved_messages(app: tauri::AppHandle, profile_id: String) -> Result<Cha
     .await
 }
 #[tauri::command]
-fn start_query(
+async fn start_query(
     app: tauri::AppHandle,
     profile_id: String,
-    global: State<AppState>,
     spec: QuerySpec,
     run_id: String,
 ) -> Result<()> {
-    let _gate = global
-        .lifecycle
-        .try_read()
-        .map_err(|_| "Application transition in progress")?;
-    let s = account(&global, &profile_id)?;
-    let _lock = s
-        .lifecycle
-        .try_lock()
-        .map_err(|_| "Account operation in progress")?;
-    spec.validate()?;
-    if s.closing.load(Ordering::SeqCst) || s.connecting.load(Ordering::SeqCst) {
-        return Err("Session transition in progress".into());
-    }
-    if run_id.is_empty() || run_id.len() > 100 {
-        return Err("Invalid run ID".into());
-    }
-    let g = gateway(&s)?;
-    let epoch = s.epoch.load(Ordering::SeqCst);
-    let cancel = Arc::new(AtomicBool::new(false));
-    if let Some((_, old)) = s
-        .active
-        .lock()
-        .unwrap()
-        .replace((run_id.clone(), cancel.clone()))
-    {
-        old.store(true, Ordering::Relaxed);
-    }
-    *s.results.lock().unwrap() = None;
-    tauri::async_runtime::spawn_blocking(move || {
-        let publish = |result: ScanResult| {
-            let global = app.state::<AppState>();
-            let s = global
-                .manager
-                .accounts
-                .lock()
-                .unwrap()
-                .get(&profile_id)
-                .cloned();
-            let Some(s) = s else {
-                return;
-            };
-            if retain_result(&s, &result, epoch) {
-                let _ = app.emit(
-                    "query-progress",
-                    json!({"profile_id":profile_id,"generation":epoch,"result":result}),
-                );
+    // Validation, session-lock arbitration and replacement of a potentially
+    // large previous ranking must not run on the Tauri/WebView UI thread.
+    background(move || {
+        let (g,epoch,cancel,previous)={
+            let global=app.state::<AppState>();
+            let _gate=global.lifecycle.try_read()
+                .map_err(|_| "Application transition in progress")?;
+            let s=account(&global,&profile_id)?;
+            let _lock=s.lifecycle.try_lock()
+                .map_err(|_| "Account operation in progress")?;
+            spec.validate()?;
+            if s.closing.load(Ordering::SeqCst) || s.connecting.load(Ordering::SeqCst){
+                return Err("Session transition in progress".into());
             }
+            if run_id.is_empty()||run_id.len()>100{
+                return Err("Invalid run ID".into());
+            }
+            let g=gateway(&s)?;
+            let epoch=s.epoch.load(Ordering::SeqCst);
+            let cancel=Arc::new(AtomicBool::new(false));
+            if let Some((_,old))=s.active.lock().unwrap()
+                .replace((run_id.clone(),cancel.clone())){
+                old.store(true,Ordering::Relaxed);
+            }
+            let previous=s.results.lock().unwrap().take();
+            (g,epoch,cancel,previous)
         };
-        match core::scan(g.as_ref(), &spec, run_id.clone(), &cancel, publish) {
-            Ok(result) => publish(result),
-            Err(e) => publish(ScanResult {
-                run_id,
-                status: core::ScanStatus::Error,
-                stop_reason:Some(core::StopReason::GatewayFailure),
-                scope:spec.scope.clone(),
-                coverage:core::ScanCoverage::default(),
-                stats:core::ScanStats::default(),
-                scanned: 0,
-                pages: 0,
-                exact: false,
-                detail: e,
-                posts: Vec::new(),
-            }),
-        }
-    });
-    Ok(())
+        // Do not hold lifecycle / active / results mutexes while dropping Post data.
+        drop(previous);
+        tauri::async_runtime::spawn_blocking(move || {
+            let publish = |result: ScanResult| {
+                let global = app.state::<AppState>();
+                let s = global
+                    .manager
+                    .accounts
+                    .lock()
+                    .unwrap()
+                    .get(&profile_id)
+                    .cloned();
+                let Some(s) = s else {
+                    return;
+                };
+                if retain_result(&s, &result, epoch) {
+                    let _ = app.emit(
+                        "query-progress",
+                        json!({"profile_id":profile_id,"generation":epoch,"result":result}),
+                    );
+                }
+            };
+            match core::scan(g.as_ref(), &spec, run_id.clone(), &cancel, publish) {
+                Ok(result) => publish(result),
+                Err(e) => publish(ScanResult {
+                    run_id,
+                    status: core::ScanStatus::Error,
+                    stop_reason:Some(core::StopReason::GatewayFailure),
+                    scope:spec.scope.clone(),
+                    coverage:core::ScanCoverage::default(),
+                    stats:core::ScanStats::default(),
+                    scanned: 0,
+                    pages: 0,
+                    exact: false,
+                    detail: e,
+                    posts: Vec::new(),
+                }),
+            }
+        });
+        Ok(())
+    }).await
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1775,16 +1795,56 @@ mod tests {
         assert!(!retain_result(&s, &current, 0));
         assert!(retain_result(&s, &current, 1));
     }
+    #[test]
+    fn release_result_frees_only_the_matching_run_and_rejects_late_progress() {
+        let s=AccountRuntime::default();
+        let cancel=Arc::new(AtomicBool::new(false));
+        *s.active.lock().unwrap()=Some(("old-run".into(),cancel.clone()));
+        let old=ScanResult {
+            run_id:"old-run".into(),status:core::ScanStatus::Complete,
+            stop_reason:Some(core::StopReason::PostLimitReached),
+            scope:core::Scope::Recent{count:1},
+            coverage:core::ScanCoverage{scope_complete:true,..Default::default()},
+            stats:core::ScanStats::default(),
+            scanned:1,pages:1,exact:true,detail:String::new(),posts:vec![],
+        };
+        assert!(retain_result(&s,&old,0));
+        release_result(&s,"other-run");
+        assert!(!cancel.load(Ordering::Relaxed));
+        assert_eq!(s.results.lock().unwrap().as_ref().unwrap().run_id,"old-run");
+        release_result(&s,"old-run");
+        assert!(cancel.load(Ordering::Relaxed));
+        assert!(s.active.lock().unwrap().is_none());
+        assert!(s.results.lock().unwrap().is_none());
+        assert!(!retain_result(&s,&old,0));
+        let newer=ScanResult{run_id:"new-run".into(),..old};
+        *s.active.lock().unwrap()=Some(("new-run".into(),Arc::new(AtomicBool::new(false))));
+        assert!(retain_result(&s,&newer,0));
+        release_result(&s,"old-run");
+        assert_eq!(s.results.lock().unwrap().as_ref().unwrap().run_id,"new-run");
+    }
 }
 #[tauri::command]
-fn cancel_query(global: State<AppState>, profile_id: String, run_id: String) -> Result<()> {
-    let s = account(&global, &profile_id)?;
-    if let Some((id, c)) = s.active.lock().unwrap().as_ref()
-        && id == &run_id
-    {
-        c.store(true, Ordering::Relaxed);
-    }
-    Ok(())
+async fn release_query(app: tauri::AppHandle,profile_id:String,run_id:String)->Result<()> {
+    background(move || {
+        let global=app.state::<AppState>();
+        let s=account(&global,&profile_id)?;
+        if !run_id.is_empty(){release_result(&s,&run_id);}
+        Ok(())
+    }).await
+}
+#[tauri::command]
+async fn cancel_query(app: tauri::AppHandle,profile_id:String,run_id:String)->Result<()> {
+    background(move || {
+        let global=app.state::<AppState>();
+        let s=account(&global,&profile_id)?;
+        if let Some((id,c))=s.active.lock().unwrap().as_ref()
+            && id==&run_id
+        {
+            c.store(true,Ordering::Relaxed);
+        }
+        Ok(())
+    }).await
 }
 #[tauri::command]
 async fn message_link(
@@ -2333,6 +2393,7 @@ pub fn run() {
             saved_messages,
             start_query,
             cancel_query,
+            release_query,
             message_link,
             preview_forward,
             forward_selected

@@ -97,6 +97,8 @@ button.icon-button:hover:enabled,.icon-button:hover { background:var(--hover); c
 .filter-children { padding-left:8px; }
 .filter-node > select { max-width:100%; }
 .results { display:flex; flex-direction:column; gap:0; }
+.result-pagination {display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;padding:8px 10px;color:var(--text-muted);font-size:11px;}
+.result-pagination button {min-height:28px;padding:3px 10px;font-size:11px;}
 .result-header {
   position:sticky; top:0; z-index:1; background:var(--surface);
   border-bottom:1px solid var(--border-subtle);

@@ -3,11 +3,12 @@ pub mod accumulator;
 pub mod boundary;
 pub mod history;
 pub mod scope;
+pub mod topk;
 use accumulator::PostAccumulator;
 use history::{HistoryReader, Page};
 use scope::{Decision, ScopeController};
-use crate::core::{query_posts, evaluate, LogicalPost, QuerySpec, ScanResult, ScanStats,
-    ScanCoverage, ScanStatus, StopReason, Truth};
+use topk::TopPosts;
+use crate::core::{QuerySpec,ScanResult,ScanStats,ScanCoverage,ScanStatus,StopReason};
 use crate::gateway::{Result, TelegramGateway};
 use std::{sync::atomic::{AtomicBool,Ordering},time::{Duration,Instant}};
 
@@ -48,7 +49,7 @@ pub fn scan_with_limits(
     let mut reader=HistoryReader::new(gateway,&spec.chat_id,&spec.scope,cancel)?;
     let mut assembler=PostAccumulator::new(reader.from_head());
     let mut scope=ScopeController::new(&spec.scope);
-    let mut eligible=Vec::<LogicalPost>::new();
+    let mut ranking=TopPosts::new(&spec.sort,spec.output_limit);
     let mut finalized=0usize;
     // Every exit path assigns all three exactly once; no provisional scan
     // status is mistaken for a terminal value.
@@ -98,9 +99,9 @@ pub fn scan_with_limits(
                     finalized+=1;
                     match scope.observe(&post){
                         Decision::Skip=>{}
-                        Decision::Include=>eligible.push(post),
+                        Decision::Include=>ranking.consider(post,&spec.filter),
                         Decision::IncludeAndStop=>{
-                            eligible.push(post);status=ScanStatus::Complete;
+                            ranking.consider(post,&spec.filter);status=ScanStatus::Complete;
                             reason=Some(StopReason::PostLimitReached);
                             detail="Requested Post count reached".into();break 'scan;
                         }
@@ -131,9 +132,9 @@ pub fn scan_with_limits(
                         finalized+=1;
                         match scope.observe(&post){
                             Decision::Skip=>{}
-                            Decision::Include=>eligible.push(post),
+                            Decision::Include=>ranking.consider(post,&spec.filter),
                             Decision::IncludeAndStop=>{
-                                eligible.push(post);status=ScanStatus::Complete;
+                                ranking.consider(post,&spec.filter);status=ScanStatus::Complete;
                                 reason=Some(StopReason::PostLimitReached);
                                 detail="Requested Post count reached".into();break 'scan;
                             }
@@ -149,7 +150,7 @@ pub fn scan_with_limits(
         if last_progress.is_none_or(|at|at.elapsed()>=Duration::from_millis(500)) {
             last_progress=Some(Instant::now());
             progress(snapshot(&run_id,spec,ScanStatus::Running,None,"Scanning; ranking is provisional",
-                &reader,&scope,&eligible,finalized,false,processed_raw));
+                &reader,&scope,&ranking,finalized,false,processed_raw));
         }
     }
     // Only offer a partial open group when the scan ended abnormally.
@@ -158,21 +159,25 @@ pub fn scan_with_limits(
     if status!=ScanStatus::Complete && let Some(post)=assembler.finish(false) {
         finalized+=1;
         if matches!(scope.observe(&post),Decision::Include|Decision::IncludeAndStop){
-            eligible.push(post);
+            ranking.consider(post,&spec.filter);
         }
     }
     let covered=status==ScanStatus::Complete;
-    Ok(snapshot(&run_id,spec,status,reason,&detail,&reader,&scope,&eligible,finalized,covered,processed_raw))
+    Ok(snapshot(&run_id,spec,status,reason,&detail,&reader,&scope,&ranking,finalized,covered,processed_raw))
 }
 
 #[allow(clippy::too_many_arguments)]
 fn snapshot(
     run_id:&str,spec:&QuerySpec,status:ScanStatus,reason:Option<StopReason>,detail:&str,
-    reader:&HistoryReader<'_>,scope:&ScopeController<'_>,eligible:&[LogicalPost],
+    reader:&HistoryReader<'_>,scope:&ScopeController<'_>,ranking:&TopPosts,
     finalized:usize,complete:bool,processed_raw:usize,
 )->ScanResult {
-    let matched=eligible.iter().filter(|p|evaluate(p,&spec.filter)==Truth::True).count();
-    let posts=query_posts(eligible,spec);
+    // Keep the IPC and WebView lightweight while scanning. Only the final
+    // result transfers the complete output_limit (up to 1000) to the UI.
+    const PROGRESS_POSTS:usize=40;
+    let posts=ranking.snapshot(if status==ScanStatus::Running {
+        PROGRESS_POSTS.min(spec.output_limit)
+    } else {spec.output_limit});
     let returned=posts.len();
     ScanResult {
         run_id:run_id.into(),status,stop_reason:reason,detail:detail.into(),
@@ -180,7 +185,7 @@ fn snapshot(
         coverage:ScanCoverage {requested_posts:scope.requested(),examined_posts:scope.examined(),
             scope_complete:complete,date_window_exhausted:scope.date_window_exhausted()},
         stats:ScanStats {raw_messages_read:reader.raw_messages_read,posts_finalized:finalized,
-            posts_matched:matched,posts_returned:returned,pages:reader.pages},
+            posts_matched:ranking.matched(),posts_returned:returned,pages:reader.pages},
         // Legacy counters stay temporarily for existing UI integrations; no
         // completeness decision is made using this alias.
         scanned:processed_raw,pages:reader.pages,exact:complete,

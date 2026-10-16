@@ -317,27 +317,32 @@ impl ChatService {
                     "limit":if query.is_empty() { 100 } else { 600 }}),
                 &cancel,
             )?;
-            for id in Self::ids(page)? {
-                let mut chat = Self::describe(g.request(
-                    json!({"@type":"getChat","chat_id":id}), &cancel,
-                )?)?;
-                if !is_archive && chat.archived {
-                    // A stale duplicate must not leak into the Main-only view.
-                    continue;
-                }
-                chat.archived = is_archive;
-                if !query.is_empty()
-                    && !chat.title.to_lowercase().contains(&query_lower)
-                    && !matched_ids.contains(&chat.id)
-                {
-                    continue;
-                }
-                if seen.insert(chat.id.clone()) {
-                    out.push(chat);
-                } else if is_archive
-                    && let Some(old) = out.iter_mut().find(|item| item.id == chat.id)
-                {
-                    old.archived = true;
+            // TDLib accepts independent requests in a batch. Sending bounded
+            // groups before awaiting replies avoids hundreds of sequential
+            // getChat round trips on accounts with large chat lists.
+            let ids=Self::ids(page)?;
+            for chunk in ids.chunks(32) {
+                let bodies=chunk.iter()
+                    .map(|id|json!({"@type":"getChat","chat_id":id}))
+                    .collect::<Vec<_>>();
+                let replies=g.request_batch(bodies,&cancel)?;
+                if replies.len()!=chunk.len(){return Err("Incomplete getChat batch".into());}
+                for reply in replies {
+                    let mut chat=Self::describe(reply)?;
+                    if !is_archive && chat.archived {
+                        // A stale duplicate must not leak into Main-only.
+                        continue;
+                    }
+                    chat.archived=is_archive;
+                    if !query.is_empty()
+                        && !chat.title.to_lowercase().contains(&query_lower)
+                        && !matched_ids.contains(&chat.id)
+                    {continue;}
+                    if seen.insert(chat.id.clone()){
+                        out.push(chat);
+                    } else if is_archive
+                        && let Some(old)=out.iter_mut().find(|item|item.id==chat.id)
+                    {old.archived=true;}
                 }
             }
         }

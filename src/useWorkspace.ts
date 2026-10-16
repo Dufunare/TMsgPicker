@@ -48,8 +48,9 @@ const search = field('search');
 const chatScope = field('chatScope');
 function selectChatFor(id:string,chat:Chat|null){
   const runId=accountViews.selectChat(id,chat);
-  if(runId)void invokeCommand('cancel_query',{profileId:id,runId}).catch(()=>{
-    // UI ownership has already changed; cancellation is best effort.
+  if(runId)void invokeCommand('release_query',{profileId:id,runId}).catch(()=>{
+    // UI ownership is already invalidated synchronously. Session transitions
+    // will also drop the native result and cancel any active history scan.
   });
 }
 function selectChat(chat:Chat|null){selectChatFor(profileId.value,chat);}
@@ -179,7 +180,15 @@ async function runQuery() {
     coverage:{requested_posts:spec.scope.kind==='recent'?spec.scope.count:spec.scope.limit_posts,examined_posts:0,scope_complete:false,date_window_exhausted:null},
     stats:{raw_messages_read:0,posts_finalized:0,posts_matched:0,posts_returned:0,pages:0},
     scanned:0,pages:0,exact:false,detail:'正在读取历史',posts:[]};
-  try{await invokeCommand('start_query',{profileId:id,spec,runId});}catch(e){if(v.currentRun===runId&&v.scanChatId===v.selectedChat?.id){v.scanning=false;v.error=String(e);v.result={...v.result!,status:'Error',detail:String(e)};}}
+  try{await invokeCommand('start_query',{profileId:id,spec,runId});}
+  catch(e){if(v.currentRun===runId&&v.scanChatId===v.selectedChat?.id){v.scanning=false;v.error=String(e);v.result={...v.result!,status:'Error',detail:String(e)};}}
+  finally{
+    // A chat can be switched while start_query is still being submitted.
+    // Releasing once more *after* the native start acknowledgement closes
+    // that race; release_query never touches a newer, different run ID.
+    if(v.currentRun!==runId||v.scanChatId!==spec.chat_id||v.selectedChat?.id!==spec.chat_id)
+      void invokeCommand('release_query',{profileId:id,runId}).catch(()=>{});
+  }
 }
 async function queryAction(fn:(id:string,runId:string)=>Promise<void>){
   const id=profileId.value,v=view.value,runId=v.currentRun,chatId=v.scanChatId;

@@ -1,9 +1,15 @@
-import {requestMedia} from './mediaRequests.ts';
+import {requestMedia,clearMediaRequests} from './mediaRequests.ts';
 import {reactive} from 'vue';
 
-const MAX_ITEMS=96, TTL=15*60*1000, MAX_ACTIVE=1;
+const MAX_ITEMS=96, MAX_CACHE_CHARS=8*1024*1024, TTL=15*60*1000, MAX_ACTIVE=1;
 type Item={url:string;expires:number};
 const cache=new Map<string,Item>();
+let cacheChars=0;
+function evict(key:string){
+  const old=cache.get(key);
+  if(old){cacheChars-=old.url.length;cache.delete(key);}
+  delete urls[key];
+}
 const inflight=new Map<string,Promise<string>>();
 const urls=reactive<Record<string,string>>({});
 const generations=new Map<string,number>();
@@ -32,7 +38,7 @@ export async function requestAvatar(profile:string,generation:number,id?:number)
   const now=Date.now();
   const cached=cache.get(key);
   if(cached&&cached.expires>now){cache.delete(key);cache.set(key,cached);return cached.url;}
-  if(cached){cache.delete(key);delete urls[key];}
+  if(cached)evict(key);
   const previous=inflight.get(key);
   if(previous)return previous;
   const revision=generations.get(profile)??0;
@@ -40,19 +46,20 @@ export async function requestAvatar(profile:string,generation:number,id?:number)
     await slot();
     try{
       if((generations.get(profile)??0)!==revision)return '';
-      const response=await requestMedia(profile,generation,id??0,false);
+      const response=await requestMedia(profile,generation,id??0,false,{priority:'avatar'});
       if((generations.get(profile)??0)!==revision)return '';
       const url=response && /^data:(image\/(jpeg|png|webp|gif)|video\/mp4);base64,/.test(response)?response:'';
       if(url.length>2_850_000)return '';
       cache.set(key,{url,expires:Date.now()+(url?TTL:60_000)});
+      cacheChars+=url.length;
       urls[key]=url;
       for(const [name,entry] of cache){
-        if(entry.expires<=Date.now()){cache.delete(name);delete urls[name];}
+        if(entry.expires<=Date.now())evict(name);
       }
-      while(cache.size>MAX_ITEMS){
+      while(cache.size>MAX_ITEMS||cacheChars>MAX_CACHE_CHARS){
         const oldest=cache.keys().next().value;
         if(!oldest)break;
-        cache.delete(oldest);delete urls[oldest];
+        evict(oldest);
       }
       return url;
     }catch {return '';}
@@ -63,12 +70,13 @@ export async function requestAvatar(profile:string,generation:number,id?:number)
   return task;
 }
 export function clearAvatars(profile?:string){
+  clearMediaRequests(profile);
   if(!profile) {
     const profiles=new Set([...cache.keys(),...inflight.keys()].map(k=>k.split(':')[0]!));
     for(const id of profiles)generations.set(id,(generations.get(id)??0)+1);
   } else generations.set(profile,(generations.get(profile)??0)+1);
   for(const key of [...cache.keys()]){
-    if(!profile||key.startsWith(profile+':')){cache.delete(key);delete urls[key];}
+    if(!profile||key.startsWith(profile+':')){evict(key);}
   }
   for(const key of [...inflight.keys()])if(!profile||key.startsWith(profile+':'))inflight.delete(key);
 }

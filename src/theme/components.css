@@ -188,6 +188,9 @@ html.media-view .native-image-viewer {margin:0;max-width:none;}
 
 /* Post media member metrics are independent of the Post-wide aggregate. */
 .media-preview {position:relative;isolation:isolate;}
+.media-resolution-state {position:absolute;top:7px;right:7px;z-index:2;padding:4px 7px;border-radius:7px;
+  background:rgba(15,23,42,.72);color:#fff;font-size:11px;pointer-events:none;}
+.media-resolution-error {background:rgba(80,38,25,.85);}
 .member-metric-overlay {position:absolute;right:6px;bottom:6px;z-index:3;display:flex;align-items:center;gap:8px;padding:4px 7px;border-radius:7px;background:rgba(12,18,28,.76);color:#fff;font-size:10px;font-variant-numeric:tabular-nums;opacity:0;transform:translateY(4px);transition:opacity .2s ease,transform .2s ease;pointer-events:none;}
 .member-metric-overlay.is-visible {opacity:1;transform:translateY(0);}
 .member-metric-overlay span {display:inline-flex;align-items:center;gap:3px;}
