@@ -17,7 +17,7 @@ function changeKind(kind:string){
 function changeField(kind:FieldName){if('field' in model.value)model.value.field={kind,...(kind==='reaction'?{emoji:'👍'}:{})};}
 </script>
 <template><div class="filter-node">
- <AppSelect :model-value="model.kind" label="谓词" :options="[{value:'compare',label:'数值比较'},{value:'contains_content',label:'媒体类型'},{value:'is_null',label:'指标未知'},{value:'is_not_null',label:'指标已知'},{value:'and',label:'AND',disabled:props.depth>=10},{value:'or',label:'OR',disabled:props.depth>=10},{value:'not',label:'NOT',disabled:props.depth>=10}]" @update:model-value="changeKind(String($event))"/>
+ <AppSelect :model-value="model.kind" label="谓词" :options="[{value:'compare',label:'比较'},{value:'contains_content',label:'类型'},{value:'is_null',label:'不存在'},{value:'is_not_null',label:'存在'},{value:'and',label:'AND',disabled:props.depth>=10},{value:'or',label:'OR',disabled:props.depth>=10},{value:'not',label:'NOT',disabled:props.depth>=10}]" @update:model-value="changeKind(String($event))"/>
  <template v-if="model.kind==='contains_content'">
   <AppSelect v-model="model.content_kind" label="内容类型" :options="contents.map(([value,label])=>({value,label}))"/>
   <AppSelect v-model="model.exists" label="存在性" :options="[{value:true,label:'存在'},{value:false,label:'不存在'}]"/>
