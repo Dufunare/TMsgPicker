@@ -9,7 +9,7 @@
 
 这不是 Telegram 官方客户端，也不是功能完整的聊天客户端、Telegram Bot 或 Mini App。不要用它代替 Telegram 官方应用处理全部聊天与账号事务。
 
-**文档导航**：[架构与决策](docs/ARCHITECTURE.md) · [功能与源码文件导览](docs/projects.md) · [开发日志](docs/Devlog.md)
+**文档导航**：[架构与决策](docs/ARCHITECTURE.md) · [功能与源码文件导览](docs/projects.md) · [开发日志](docs/Devlog.md) · [Windows/TDLib 源码构建](docs/BUILD_WINDOWS.md) · [发布与验收流程](docs/RELEASE.md)
 
 ## 目录
 
@@ -22,6 +22,7 @@
 - [设置选项](#设置选项)
 - [常见异常与处理](#常见异常与处理)
 - [本地数据、安全及当前限制](#本地数据安全及当前限制)
+- [固定 TDLib 依赖与 Windows 发布](#固定-tdlib-依赖与-windows-发布)
 - [测试与参与开发](#测试与参与开发)
 
 ## 快速上手与构建
@@ -33,9 +34,9 @@
 1. Windows WebView2 Runtime（多数较新的 Windows 系统已具备）。
 2. Node.js（建议 24，或满足当前 TypeScript/Node 测试要求的版本）与 pnpm 10。
 3. Rust 稳定版工具链（支持 Rust 2024 edition）、Visual Studio 的 MSVC C++ Build Tools 和 Windows SDK。
-4. **与当前编译配置匹配的 TDLib x64 构建产物**：`tdjson.lib`、`tdjson.dll`、`libssl-3-x64.dll`、`libcrypto-3-x64.dll`、`z.dll`。
+4. **与当前编译配置匹配的 TDLib x64 构建产物**：`tdjson.lib`、`tdjson.dll`、`libssl-3-x64.dll`、`libcrypto-3-x64.dll`，以及实际生成的 `z.dll` 或 `zlib1.dll`。无需自行寻找预编译 DLL，可使用下面的固定依赖构建脚本。
 
-**依赖说明**：运行已构建的程序不需要 pnpm、Rust、CMake 或 gperf；CMake/gperf 主要用于你**自行编译 TDLib**。本仓库目前没有一键下载／编译 TDLib 的脚本，也没有经过完整验收的 Release 安装包。`.lib` 是 MSVC 链接用的导入库，不是交付给最终用户的运行库；DLL 则必须能在运行时被找到。
+**依赖说明**：已经提供 `scripts/build-tdlib.ps1` 来检出固定版本 TDLib/vcpkg、构建 OpenSSL/zlib/gperf 和 TDLib。普通用户运行发行物不需要 CMake/gperf/MSVC/Rust/pnpm；`.lib` 是 MSVC 链接导入库，最终用户不需要。CI 可以生成 NSIS 和 Portable ZIP，但**只有正式发布且完成人工干净机验收的 Release**才可被视为已交付产品。详情见 [源码构建](docs/BUILD_WINDOWS.md) 和 [发布流程](docs/RELEASE.md)。
 
 ### Windows 源码启动
 
@@ -52,7 +53,7 @@ pnpm.cmd install --frozen-lockfile
 pnpm.cmd tauri dev
 ```
 
-如已在仓库根目录的 `Release/` 或 `Release/Release/` 放置 TDLib 构建产物，可省略环境变量。`src-tauri/build.rs` 检查所需文件，并将 DLL 暂存到 Cargo 调试/发布 profile 目录以及对应的 `deps/`；找不到时会给出缺失路径。PowerShell 上使用 `pnpm.cmd` 可以绕开 `pnpm.ps1` 的脚本执行策略限制。
+需要从指定的 TDLib 1.8.68 源码重新构建时，可直接运行 `./scripts/build-tdlib.ps1` 和 `./scripts/stage-native.ps1`，之后设置 `$env:TMSGPICKER_TDLIB_DIR = (Resolve-Path .\native\tdlib).Path` 再启动。脚本不会修改用户的 Telegram Session。旧开发环境如已在仓库根目录的 `Release/` 或 `Release/Release/` 放置 TDLib 构建产物，仍可省略环境变量，但无法据此证明旧 DLL 对应锁定的源码提交。`src-tauri/build.rs` 检查所需文件，并将 DLL 暂存到 Cargo 调试/发布 profile 目录以及对应的 `deps/`；找不到时会给出缺失路径。PowerShell 上使用 `pnpm.cmd` 可以绕开 `pnpm.ps1` 的脚本执行策略限制。
 
 也可尝试生成不带安装器的开发构建：
 
@@ -62,7 +63,7 @@ pnpm.cmd tauri build --debug --no-bundle
 # src-tauri\target\debug\tmsgpicker.exe
 ```
 
-**注意**：`pnpm.cmd build` 只构建前端，不能独立产生能连接 TDLib 的桌面应用；`pnpm.cmd tauri build` 的安装包是否已携带全部 DLL、VC++ 运行库等，还需要专门打包与干净系统验证，不能直接把开发产物当作经过验收的安装版发布。
+**注意**：`pnpm.cmd build` 只构建前端。直接执行 `pnpm.cmd tauri build` 仍属于常规开发打包，不自动采用发布专用资源配置；正式 NSIS/便携版必须走 [Release staging 和打包脚本](docs/RELEASE.md)，并核验 DLL、VC++ 运行库和 WebView2。
 
 ### 第一次打开
 
@@ -313,7 +314,7 @@ tdlib/
 
 1. 主要支持 Windows x64；Linux/macOS 不在已验证桌面运行范围内。
 2. 没有打包进程序的公共 Telegram API 身份；每位用户需要申请自己的凭据。
-3. GitHub 上的代码构建与 Mock 测试不等于已经发布并验证安装器／便携版；原生 DLL 仍需开发者自行准备。
+3. GitHub Release CI 已提供从固定源码构建 TDLib/原生 DLL 和 NSIS/便携 ZIP 的路径；源码本地开发也可使用固定构建脚本。**自动构建成功仍不等于干净机验收或已公开发布**。
 4. 聊天列表受 TDLib 可用数据、加载页数和查询范围限制；不提供全 Telegram 账号的实时全文全量索引。
 5. 扫描设有内部资源保护（典型上限：100000 条原始消息、2500 页、300 秒，另有小幅 Album 边界额度）；达到上限可返回部分范围而非静默伪造 Complete。
 6. 查询以**本次扫描时的消息/互动指标快照**为基础，不会持续刷新排行榜；UI 排序编辑器只有一个字段。
@@ -321,7 +322,36 @@ tdlib/
 8. 媒体访问仍受单账号原生生命周期锁、下载队列、文件大小及内存缓存预算约束；这不是完整的视频、音频或附件管理器。
 9. 当前界面没有批量转发提交入口；部分转发逻辑属于已有但未开放给普通用户的后端能力。
 10. 已有自动化 Mock 回归，但不能据此保证真实 Windows 设备上的全部 FPS、峰值内存、网络及 Telegram 授权场景已被验证。
-11. 仓库当前还没有单独的 `LICENSE` 文件；如准备对外正式开源，请在发布前明确**本项目自身的许可证**，并核对 TDLib、OpenSSL、zlib 等第三方组件的再分发许可。
+11. 仓库当前尚未由权利人选定本项目自身的 `LICENSE`；发布前须明确开源许可，并核对 TDLib、OpenSSL、zlib 和微软 VC++ 运行库的再分发要求。发行构建会附带所用第三方版本及版权声明。
+
+## 固定 TDLib 依赖与 Windows 发布
+
+**当前目标 TDLib 版本：1.8.68（2026 年 10 月 12 日更新）。** 固定源码提交为 [`f381f4b35ebfd52a086ec3af5352ed77bbdbde01`](https://github.com/tdlib/td/commit/f381f4b35ebfd52a086ec3af5352ed77bbdbde01)。这说明项目**新构建的依赖基线**，不代表以前手工构建的 DLL 已验证具有同一来源。
+
+上游依赖基线记录在 [`scripts/native-versions.json`](scripts/native-versions.json)：
+
+| 依赖 | 基线 |
+|---|---|
+| TDLib | **1.8.68 / 2026-10-12 / 完整 SHA 固定** |
+| OpenSSL | `3.6.5#1`（vcpkg） |
+| zlib | `1.3.2#2`（vcpkg） |
+| gperf（仅编译时） | `3.3#1`（vcpkg） |
+| vcpkg | `e456309491fd875487bf02b8a0dca76c1b1b00cc` |
+
+完整 Windows 构建：
+
+```powershell
+.\scripts\build-tdlib.ps1 -Jobs 2
+.\scripts\stage-native.ps1
+$env:TMSGPICKER_TDLIB_DIR = (Resolve-Path .\native\tdlib).Path
+pnpm.cmd install --frozen-lockfile
+pnpm.cmd tauri build --bundles nsis --config src-tauri/tauri.release.generated.json
+.\scripts\package-release.ps1
+```
+
+生成的安装包、免安装 ZIP 和 SHA-256 位于 `native/dist/`。安装包在普通 Windows 上不要求用户编译 TDLib；便携版无需安装主程序，但用户 Session 仍使用 `%LOCALAPPDATA%`，且系统必须有 WebView2。GitHub 的 `vX.Y.Z` tag Release 工作流会生成 **Draft Release**，维护者完成干净机手动测试后才发布。工作流**不内置 Telegram API 凭据**；用户始终需要在应用设置中自行配置。
+
+进一步阅读：[Windows/TDLib 构建细节](docs/BUILD_WINDOWS.md) · [CI、打包、许可证和人工发布检查](docs/RELEASE.md)。
 
 ## 测试与参与开发
 
@@ -341,6 +371,6 @@ cargo test --manifest-path src-tauri/Cargo.toml --lib --tests
 cargo check --manifest-path src-tauri/Cargo.toml --all-targets
 ```
 
-自动化测试主要使用 Mock TDLib、合成消息、合成账号及临时目录，不访问真实账号、不调用真实转发或注销。CI 目前重点执行前端检查和 Windows Rust 离线测试，**不代表安装包、真实登录及消息投递已通过端到端验收**。
+自动化测试主要使用 Mock TDLib、合成消息、合成账号及临时目录，不访问真实账号、不调用真实转发或注销。普通 PR CI 执行前端检查和 Windows Rust 离线回归；独立的 Windows Release 工作流额外构建固定源码的 TDLib/原生 DLL、NSIS 与 ZIP，执行 ABI smoke、PE 依赖/安装器内容检查并生成校验和。**仍不代表真实登录、消息投递和干净机 GUI 的端到端验收已经完成**。
 
 要理解数据模型、查询语义、生命周期或扩展源码，请参阅 [ARCHITECTURE.md](docs/ARCHITECTURE.md) 和 [projects.md](docs/projects.md)；历史决策与迭代记录在 [Devlog.md](docs/Devlog.md)。

@@ -1,0 +1,162 @@
+name: Windows x64 Release
+
+on:
+  pull_request:
+    paths:
+      - "scripts/**"
+      - ".github/workflows/release.yml"
+      - "src-tauri/build.rs"
+      - "src-tauri/tauri.conf.json"
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate-scripts:
+    name: Validate pinned dependencies and PowerShell syntax
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Parse all release PowerShell scripts without executing
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $names = @('build-tdlib', 'stage-native', 'audit-pe-imports', 'package-release')
+          foreach ($name in $names) {
+            $path = Join-Path $PWD "scripts/$name.ps1"
+            $tokens = $null
+            $errors = $null
+            $null = [System.Management.Automation.Language.Parser]::ParseFile($path, [ref]$tokens, [ref]$errors)
+            if ($errors.Count -gt 0) {
+              $errors | ForEach-Object { Write-Error ("{0}: {1}" -f $name, $_) }
+              throw "PowerShell syntax invalid: $name"
+            }
+          }
+          $versions = Get-Content scripts/native-versions.json -Raw | ConvertFrom-Json
+          if ($versions.tdlib.version -ne '1.8.68' -or
+              $versions.tdlib.commit -ne 'f381f4b35ebfd52a086ec3af5352ed77bbdbde01') {
+            throw 'TDLib dependency baseline changed unexpectedly; update documentation and review.'
+          }
+      - name: Offline release staging and integrity regression (synthetic files)
+        run: ./tests/releaseStaging.ps1
+
+  build:
+    name: Build and inspect Windows x64 assets
+    if: github.event_name != 'pull_request'
+    needs: validate-scripts
+    runs-on: windows-2022
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Verify release tag and app version
+        env:
+          RELEASE_REF_TYPE: ${{ github.ref_type }}
+          RELEASE_REF_NAME: ${{ github.ref_name }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $version = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          if ($env:RELEASE_REF_TYPE -eq 'tag' -and $env:RELEASE_REF_NAME -cne "v$version") {
+            throw "Tag $env:RELEASE_REF_NAME must match app version v$version"
+          }
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - name: Install frontend dependencies
+        run: pnpm.cmd install --frozen-lockfile
+      - name: Frontend tests
+        run: pnpm.cmd test
+      - name: Frontend typecheck and production build
+        run: pnpm.cmd build
+      - name: Rust core and mock tests (no TDLib required)
+        run: cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --lib --tests
+      - name: Rust core Clippy
+        run: cargo clippy --manifest-path src-tauri/Cargo.toml --no-default-features --all-targets -- -D warnings
+      - uses: actions/cache@v4
+        with:
+          path: ~/AppData/Local/vcpkg/archives
+          key: vcpkg-windows-2022-${{ hashFiles('scripts/native-versions.json') }}
+      - name: Build pinned TDLib, OpenSSL, zlib and gperf
+        run: ./scripts/build-tdlib.ps1 -Jobs 2
+      - name: Stage verified runtime DLLs, license notices and NSIS config
+        run: ./scripts/stage-native.ps1
+      - name: Build NSIS installer with runtime dependencies
+        env:
+          TMSGPICKER_TDLIB_DIR: ${{ github.workspace }}\native\tdlib
+        run: pnpm.cmd tauri build --bundles nsis --config src-tauri/tauri.release.generated.json
+      - name: Smoke test pinned TDLib ABI (no account or Session)
+        env:
+          TMSGPICKER_TDLIB_DIR: ${{ github.workspace }}\native\tdlib
+        run: |
+          cargo build --manifest-path src-tauri/Cargo.toml --release --bin tdlib_smoke
+          if ($LASTEXITCODE -ne 0) { throw 'Could not build TDLib smoke test' }
+          $output = (& ./src-tauri/target/release/tdlib_smoke.exe | Out-String)
+          if ($LASTEXITCODE -ne 0) { throw "TDLib ABI smoke test failed: $output" }
+          $expected = (Get-Content scripts/native-versions.json -Raw | ConvertFrom-Json).tdlib.version
+          if (-not $output.Contains($expected)) { throw "TDLib reported unexpected version: $output" }
+          Write-Host $output
+      - name: Inspect installer and produce audited portable ZIP + SHA256SUMS
+        run: ./scripts/package-release.ps1
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tmsgpicker-windows-x64
+          path: |
+            native/dist/TMsgPicker-Setup-x64.exe
+            native/dist/TMsgPicker-Portable-x64.zip
+            native/dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  draft-release:
+    name: Attach assets to draft GitHub Release
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: tmsgpicker-windows-x64
+          path: artifacts
+      - name: Create/update draft Release (human review required)
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            artifacts/TMsgPicker-Setup-x64.exe
+            artifacts/TMsgPicker-Portable-x64.zip
+            artifacts/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          body: |
+            Windows x64 preview. The application **does not embed Telegram API
+            credentials**; configure your own API ID/Hash in Application Settings.
+
+            TDLib and native dependency commits are recorded in the ZIP's
+            licenses/native-dependencies.json.
+
+            Before publishing this draft, perform the manual clean-machine checks
+            in docs/RELEASE.md (installer, runtime loading, upgrades/uninstall,
+            retained local Sessions and source provenance). No signing is configured.

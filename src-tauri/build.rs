@@ -7,7 +7,6 @@ const RUNTIME_DLLS: &[&str] = &[
     "tdjson.dll",
     "libssl-3-x64.dll",
     "libcrypto-3-x64.dll",
-    "z.dll",
 ];
 
 fn main() {
@@ -42,8 +41,20 @@ fn main() {
             }
         });
 
+    // vcpkg's zlib runtime name has changed across releases. Never rename a DLL:
+    // Windows PE import names must be satisfied by the actual built DLL.
+    let zlib_dll = ["z.dll", "zlib1.dll"]
+        .into_iter()
+        .find(|name| native_dir.join(name).is_file())
+        .unwrap_or_else(|| panic!(
+            "Missing zlib runtime in {} (z.dll or zlib1.dll)", native_dir.display()
+        ));
+    let runtime_dlls = RUNTIME_DLLS.iter().copied()
+        .chain(std::iter::once(zlib_dll))
+        .collect::<Vec<_>>();
+
     // Check required native files
-    for filename in RUNTIME_DLLS.iter().copied().chain(["tdjson.lib"]) {
+    for filename in runtime_dlls.iter().copied().chain(["tdjson.lib"]) {
         let path = native_dir.join(filename);
         assert!(
             path.is_file(),
@@ -66,7 +77,7 @@ fn main() {
         .expect("Cannot locate Cargo profile directory");
 
     // Copy runtime DLLs beside the executable
-    for filename in RUNTIME_DLLS {
+    for filename in runtime_dlls {
         copy_if_changed(&native_dir.join(filename), &profile_dir.join(filename));
         let deps = profile_dir.join("deps");
         fs::create_dir_all(&deps).expect("Cannot create DLL staging directory");
