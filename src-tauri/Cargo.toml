@@ -1,8 +1,9 @@
 [package]
 name = "tmsgpicker"
 version = "0.1.0"
-description = "A Tauri App"
-authors = ["you"]
+description = "A local-first Telegram Post search and browsing desktop application"
+authors = ["Dufunare"]
+license = "MIT"
 edition = "2024"
 default-run = "tmsgpicker"
 
@@ -25,8 +26,6 @@ name = "tdlib_smoke"
 path = "src/bin/tdlib_smoke.rs"
 required-features = ["desktop"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
 [lib]
 # The `_lib` suffix may seem redundant but it is necessary
 # to make the lib name unique and wouldn't conflict with the bin name.
@@ -46,7 +45,6 @@ rpassword = "7"
 base64 = "0.22"
 
 
-# Read the optimization guideline for more details: https://tauri.app/concept/size/#cargo-configuration
 [profile.release]
 codegen-units = 1
 lto = true

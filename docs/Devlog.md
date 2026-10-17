@@ -155,3 +155,12 @@
 - 原生分发 staging 会将应用 MIT 许可证复制至 `licenses/TMsgPicker-MIT.txt`，与 TDLib/OpenSSL/zlib 的版权声明分别保存；NSIS、便携 ZIP 和离线 Mock 测试核对其存在和一致性。
 - 此项变更在首轮手动 Windows Release workflow **启动之后**提交：已经开始的构建仍针对旧提交，不会自动包含 MIT 文件，完成发布前须基于新的 `main` 再次运行。
 - 已解决本项目自有许可证选择；第三方许可和 Microsoft CRT 的合规审查、干净机安装验证、代码签名属于独立事项。
+
+## 2026-10-17：v0.1 发布前死代码审查
+
+- 逐一比对当前 22 个 Vue 组件及原生 Tauri 窗口创建点：仅保留主窗口、登录窗口、设置窗口路由；删除没有组件/后端入口的旧 `?view=media` 特判。
+- 移除早期日期日历/滚轮、媒体 lightbox/独立查看器、旧 Post 操作卡片等不再被实际模板引用的样式；保留当前 `AppDateTime` 的 `inline-date-wheel`、媒体自动原图、Post 指标及分页样式。
+- 清除 Vite/Vue/Tauri 初始模板的三个未使用 SVG；HTML 标签语言和标题改为实际项目名，favicon 指向已有的 Tauri 应用图标。
+- 清理 Cargo 默认示例描述和作者字段，添加 `license = "MIT"`，与仓库根目录 MIT `LICENSE` 一致。
+- **刻意保留** `tdlib_smoke`（Release 的 ABI/客户端生命周期验证入口）、`tdlib_auth`（需要开发者显式执行的手动诊断程序）、Post 的完整排序参照逻辑及转发预检/未知回执安全链路。它们虽然不是普通 UI 功能，却仍具有调试、测试或未来安全价值，不能仅因主界面暂未暴露便删除。
+- 这轮仅进行可证明无调用方的清理，不改变 TDLib 数据库布局、账号生命周期、扫描计数、发送协议与用户本地 Session。

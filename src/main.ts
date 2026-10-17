@@ -15,7 +15,11 @@ import './theme/window-chrome.css';
 
 void initializeAppearance();
 const view = new URLSearchParams(window.location.search).get('view');
-if (view) document.documentElement.classList.add(view==='media'?'media-view':'settings-view');
+// The native application currently has a main window and two auxiliary
+// window types: login and settings. The abandoned ?view=media prototype
+// never had a matching component or a Rust window-opening call.
+if (view === 'login' || view === 'settings' || view === 'account') {
+  document.documentElement.classList.add('settings-view');
+}
 const page = view === 'login' ? LoginPage : view === 'settings' || view === 'account' ? SettingsPage : App;
-// The media viewer is a special-purpose surface, not a decorated application page.
-createApp(view === 'media' ? page : WindowShell, view === 'media' ? {} : { page, view: view ?? 'main' }).mount('#app');
+createApp(WindowShell, { page, view: view ?? 'main' }).mount('#app');
