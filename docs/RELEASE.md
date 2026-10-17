@@ -34,7 +34,7 @@ v0.2.0 使用**显式的发布意图文件** [`scripts/release-intent.json`](../
 2. 使用 [`docs/assets/tmsgpicker-icon.svg`](assets/tmsgpicker-icon.svg) 生成所有 Tauri 平台图标；
 3. 如果图标生成发生改变，先把生成文件提交回 `main`；无法推送则拒绝发版；
 4. 完成前端、Rust 离线单测、固定 TDLib 构建、NSIS、ABI Smoke Test、依赖审计和 SHA256；
-5. 通过后以**实际用于构建的源码 SHA**创建 `v0.2.0` tag 和 **Draft / Prerelease**；
+5. 通过后以**实际用于构建的源码 SHA**显式创建不可移动的 `v0.2.0` annotated tag，再创建 **Draft / Prerelease**；
 6. 将安装器、便携 ZIP、完整 Build Artifacts ZIP、来源清单和校验文件都上传到 GitHub Releases 的 **Assets**。
 
 > 未通过构建时不会创建新标签。已有标签不能重新指向其他提交；同版本重复发布应报错并另起补丁版本。Draft 不等于公开发布。
@@ -147,3 +147,11 @@ Release 默认**没有代码签名**，可能出现 SmartScreen 声誉警告。�
 v0.1.x 优先稳定 NSIS/ZIP、真实登录/代理/Session 与 DLL 包装；保持 BYO API 和人工发布确认。收集崩溃/升级/安装反馈时**不要要求用户上传真实 Session、API Hash、验证码或消息历史**。
 
 后续可考虑：签名与 SmartScreen 声誉、自动升级（必须首先保证数据库迁移与回滚）、MSI、Windows ARM64、依赖构建缓存/文件证明、真实 GUI/干净机自动化。上述是**规划方向而非当前已提供功能**。
+
+## 9. Tag 与 Release 一一对应（v0.2.0 起）
+
+- Windows 构建成功之后，`draft-release` 会**显式创建 annotated Git Tag**，并验证已存在的 Tag 不可指向其他提交；随后上传文件并创建 Draft Release。不能依赖 Draft 自动生成 Tag。
+- 维护者完成真实 Windows 安装、启动、升级及会话检查之后，在 GitHub Releases **Publish release**。发布后 Tag 和 Release 对应同一 `vX.Y.Z`，公开正式版本设为 Latest。
+- 已发布的 Release **不应被构建工作流重新降级为 Draft**。如果需要修复安装包，应升级版本生成新 Tag，而不是移动历史 Tag 或覆盖既有 Assets。
+- `v0.1.0` 是已有 Tag 和旧的 Draft Release；保留它作为历史，不要为了清爽而单独删除 Tag 或 Release，否则会再次破坏一一对应关系。Draft 只对有管理权限的成员可见。
+- 仓库中的 `.github/workflows/publish-release.yml` 支持在本地验收完成后，以显式的版本、对应构建提交和 Release ID **一次性发布既有 Draft**；所有检查失败时不会公开 Release。
