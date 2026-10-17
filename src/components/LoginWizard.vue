@@ -3,7 +3,7 @@ import {useLogin} from '../useLogin';
 import AppSelect from './AppSelect.vue';
 import {computed} from 'vue';
 import {qrcodegen} from '../qr/qrcodegen';
-const {snapshot,connection,loginMethod,qrLink,requestQr,phone,passphrase,remember,recoveryId,value,twoFactorPassword,busy,error,label,pending,sendingPhone,combinedAuth,begin,submit,cancel,openSettings,retryIdentity}=useLogin();
+const {snapshot,connection,loginMethod,qrLink,requestQr,phone,passphrase,remember,recoveryId,value,twoFactorPassword,busy,error,label,pending,sendingPhone,qrPending,combinedAuth,begin,submit,cancel,openSettings,retryIdentity}=useLogin();
 const qrSvg=computed(()=>{
   const link=qrLink.value;
   if(!link||connection.value?.auth_state!=='authorizationStateWaitOtherDeviceConfirmation')return '';
@@ -52,7 +52,7 @@ function codeChannelLabel(kind:string|null|undefined):string {
   <div class="buttons"><button class="primary" :disabled="busy">{{busy?'正在创建会话…':'开始登录'}}</button><button type="button" :disabled="busy" @click="cancel">取消</button></div>
 </form>
 <template v-else>
-  <p class="muted">{{sendingPhone?'正在提交手机号并请求验证码…':connection?.detail}}</p><p v-if="connection?.connection_state!=='connectionStateReady'" class="muted">等待网络连接；请检查全局 SOCKS5 配置。</p>
+  <p class="muted">{{qrPending?'正在准备 QR 扫码登录…':sendingPhone?'正在提交手机号并请求验证码…':connection?.detail}}</p><p v-if="connection?.connection_state!=='connectionStateReady'" class="muted">等待网络连接；请检查全局 SOCKS5 配置。</p>
   <section v-if="connection?.auth_state==='authorizationStateWaitOtherDeviceConfirmation'" class="settings-card qr-login" aria-label="Telegram QR 登录">
     <h3>使用 Telegram 扫码登录</h3>
     <div v-if="qrSvg" class="qr-login-code" role="img" aria-label="Telegram 登录二维码" v-html="qrSvg"></div>
@@ -60,8 +60,8 @@ function codeChannelLabel(kind:string|null|undefined):string {
     <small>在已登录的 Telegram 手机客户端进入 设置 → 设备 → 连接桌面设备，扫描二维码并确认授权。二维码自动更新，请勿分享。</small>
     <div class="buttons"><button :disabled="busy" @click="requestQr">重新获取二维码</button></div>
   </section>
-  <div v-if="connection?.auth_state==='authorizationStateWaitCode'||connection?.auth_state==='authorizationStateWaitPhoneNumber'" class="buttons"><button :disabled="busy" @click="requestQr">改用 QR 扫码登录</button></div>
-  <section v-if="connection?.auth_state==='authorizationStateWaitCode'" class="settings-card" aria-label="验证码投递诊断">
+  <div v-if="!qrPending&&(connection?.auth_state==='authorizationStateWaitCode'||connection?.auth_state==='authorizationStateWaitPhoneNumber')" class="buttons"><button :disabled="busy" @click="requestQr">改用 QR 扫码登录</button></div>
+  <section v-if="!qrPending&&connection?.auth_state==='authorizationStateWaitCode'" class="settings-card" aria-label="验证码投递诊断">
     <h3>TDLib 验证码投递诊断</h3>
     <p>授权状态：<code>{{connection.auth_state}}</code></p>
     <p>网络状态：<code>{{connection.connection_state}}</code></p>
@@ -76,8 +76,15 @@ function codeChannelLabel(kind:string|null|undefined):string {
     <p v-else>当前已进入等待验证码状态，但此授权事件中没有收到有效的 <code>code_info</code>。</p>
     <small>这是 TDLib 报告的投递方式，并不保证验证码实际送达。若显示 Telegram 客户端内消息，请检查已登录官方客户端中的 Telegram 服务通知聊天（通常为 777000，包括归档）。本诊断不会自动重发验证码；不要连续重复请求。</small>
   </section>
-  <form v-if="combinedAuth" class="authorization-form" @submit.prevent="submit"><label>Telegram 验证码<input v-model="value" type="text" inputmode="numeric" autocomplete="off" :disabled="busy||connection?.auth_state==='authorizationStateWaitPassword'" :required="connection?.auth_state==='authorizationStateWaitCode'" :placeholder="connection?.auth_state==='authorizationStateWaitPassword'?'验证码已验证':''"></label><label>Telegram 两步验证密码（2FA）<input v-model="twoFactorPassword" type="password" autocomplete="off" :disabled="busy" :required="connection?.auth_state==='authorizationStateWaitPassword'" placeholder="已启用两步验证时填写"></label><small>已启用两步验证请同时填写密码；未启用可留空。验证码通过后会自动完成两步验证。</small><button class="primary" :disabled="busy">{{busy?'正在验证…':connection?.auth_state==='authorizationStateWaitPassword'?'提交两步验证密码':'验证并登录'}}</button></form>
+  <form v-if="combinedAuth&&!qrPending" class="authorization-form" @submit.prevent="submit">
+    <label v-if="connection?.auth_state==='authorizationStateWaitCode'">Telegram 验证码<input v-model="value" type="text" inputmode="numeric" autocomplete="off" :disabled="busy" required></label>
+    <label>Telegram 两步验证密码（2FA）<input v-model="twoFactorPassword" type="password" autocomplete="off" :disabled="busy" :required="connection?.auth_state==='authorizationStateWaitPassword'" placeholder="已启用两步验证时填写"></label>
+    <small v-if="connection?.auth_state==='authorizationStateWaitCode'">已启用两步验证时可同时填写密码；验证码通过后会自动继续验证。</small>
+    <small v-else>请填写 Telegram 两步验证密码以完成登录。</small>
+    <button class="primary" :disabled="busy">{{busy?'正在验证…':connection?.auth_state==='authorizationStateWaitPassword'?'提交两步验证密码':'验证并登录'}}</button>
+  </form>
   <form v-else-if="label" @submit.prevent="submit"><label>{{label}}<input v-model="value" :type="connection?.auth_state==='authorizationStateWaitPhoneNumber'||connection?.auth_state==='authorizationStateWaitEmailAddress'?'text':'password'" autocomplete="off" required></label><button class="primary" :disabled="busy">提交</button></form>
+  <p v-else-if="qrPending" class="muted">正在等待 Telegram 生成扫码链接…</p>
   <p v-else-if="sendingPhone" class="muted">验证码发送后会自动显示验证表单，无需再次输入手机号。</p>
   <p v-else-if="connection?.auth_state==='authorizationStateReady'">正在读取 Telegram 身份并登记账号…</p>
   <p v-else-if="connection?.auth_state==='authorizationStateWaitOtherDeviceConfirmation'">请在已登录的 Telegram 设备完成授权确认。</p>
