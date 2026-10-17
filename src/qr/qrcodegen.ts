@@ -24,7 +24,7 @@
 "use strict";
 
 
-namespace qrcodegen {
+export namespace qrcodegen {
 	
 	type bit  = number;
 	type byte = number;
