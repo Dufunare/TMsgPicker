@@ -420,6 +420,7 @@ fn apply_connection(s: &AccountRuntime, epoch: u64, v: &Value) -> Option<(Connec
             "authorizationStateWaitTdlibParameters" => "等待 API 配置和数据库密码",
             "authorizationStateWaitPhoneNumber" => "请输入带国家代码的手机号",
             "authorizationStateWaitCode" => "请输入 Telegram 登录验证码",
+            "authorizationStateWaitOtherDeviceConfirmation" => "请使用已登录的 Telegram 手机客户端扫描二维码并确认",
             "authorizationStateWaitPassword" => "请输入 Telegram 两步验证密码",
             "authorizationStateWaitEmailAddress" => "请输入授权邮箱",
             "authorizationStateWaitEmailCode" => "请输入邮箱验证码",
