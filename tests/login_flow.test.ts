@@ -33,7 +33,7 @@ test('automatic phone submission shows a waiting screen, then code and 2FA toget
   login.updateConnection({...connection,auth_state:'authorizationStateWaitCode',detail:'请输入验证码'});
   const code=await wizard(login);assert.match(code,/Telegram 验证码/);assert.match(code,/Telegram 两步验证密码（2FA）/);assert.match(code,/验证并登录/);assert.equal(code.includes('type="tel"'),false);
   login.updateConnection({...connection,auth_state:'authorizationStateWaitPassword',detail:'请输入两步验证密码'});
-  const password=await wizard(login);assert.match(password,/Telegram 验证码/);assert.match(password,/验证码已验证/);assert.match(password,/Telegram 两步验证密码（2FA）/);
+  const password=await wizard(login);assert.doesNotMatch(password,/Telegram 验证码/);assert.doesNotMatch(password,/验证码已验证/);assert.match(password,/Telegram 两步验证密码（2FA）/);
 });
 
 test('TDLib Telegram-message delivery metadata is visible, with no phone number or code exposed',async()=>{
@@ -173,4 +173,34 @@ test('switching existing code step to QR sends only pending profile and generati
   login.updateConnection({...connection,auth_state:'authorizationStateWaitCode'});
   await login.requestQr();
   assert.deepEqual(calls.find(c=>c.command==='request_qr_login')?.args,{profileId:'pending',generation:1});
+});
+
+test('QR initialization hides transient phone input and switch action, then QR 2FA shows password only',async()=>{
+ const transport=async(command:string)=>command==='login_status'?{...connection,qr_mode:true,auth_state:'authorizationStateWaitPhoneNumber'}:command==='app_settings'?fixture:undefined;
+ const login=await makeLogin(transport as Parameters<typeof useLogin>[0]);
+ login.loginMethod.value='qr';login.passphrase.value='synthetic key';await login.begin();
+ const boot=await wizard(login);
+ assert.match(boot,/正在准备 QR 扫码登录/);
+ assert.doesNotMatch(boot,/改用 QR 扫码登录|请输入带国家代码的手机号|type="tel"|Telegram 验证码/);
+ assert.equal(login.qrPending.value,true);
+ login.updateConnection({...connection,qr_mode:true,auth_state:'authorizationStateWaitOtherDeviceConfirmation'});
+ const scan=await wizard(login);
+ assert.match(scan,/使用 Telegram 扫码登录/);
+ login.updateConnection({...connection,qr_mode:true,auth_state:'authorizationStateWaitPassword'});
+ const password=await wizard(login);
+ assert.match(password,/Telegram 两步验证密码（2FA）/);
+ assert.match(password,/请填写 Telegram 两步验证密码以完成登录/);
+ assert.doesNotMatch(password,/Telegram 验证码|验证码通过后|验证码已验证/);
+ assert.doesNotMatch(password,/改用 QR 扫码登录|type="tel"/);
+});
+test('server QR mode is recovered from status and takes precedence over initial phone mode',async()=>{
+ const login=await makeLogin(async(command:string)=>{
+   if(command==='login_status')return {...connection,qr_mode:true,auth_state:'authorizationStateWaitPhoneNumber'};
+   if(command==='app_settings')return fixture;
+ } as Parameters<typeof useLogin>[0]);
+ await login.sync();
+ assert.equal(login.loginMethod.value,'qr');
+ assert.equal(login.qrPending.value,true);
+ const html=await wizard(login);
+ assert.doesNotMatch(html,/改用 QR 扫码登录|请输入带国家代码的手机号/);
 });
