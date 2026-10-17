@@ -6,6 +6,7 @@ on:
       - "scripts/publish-intent.json"
 permissions:
   contents: write
+  actions: read
 concurrency:
   group: publish-tmsgpicker-v0.2.0
   cancel-in-progress: false
