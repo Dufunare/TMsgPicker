@@ -194,10 +194,11 @@ test('QR initialization hides transient phone input and switch action, then QR 2
  assert.doesNotMatch(password,/改用 QR 扫码登录|type="tel"/);
 });
 test('server QR mode is recovered from status and takes precedence over initial phone mode',async()=>{
- const login=await makeLogin(async(command:string)=>{
+ const transport=async(command:string)=>{
    if(command==='login_status')return {...connection,qr_mode:true,auth_state:'authorizationStateWaitPhoneNumber'};
    if(command==='app_settings')return fixture;
- } as Parameters<typeof useLogin>[0]);
+ };
+ const login=await makeLogin(transport as Parameters<typeof useLogin>[0]);
  await login.sync();
  assert.equal(login.loginMethod.value,'qr');
  assert.equal(login.qrPending.value,true);
