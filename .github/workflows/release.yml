@@ -98,7 +98,10 @@ jobs:
             throw "package.json version $npmVersion != app version $version"
           }
           $cargo = Get-Content src-tauri/Cargo.toml -Raw
-          $cargoMatch = [regex]::Match($cargo, '(?m)^version\s*=\s*"([^"]+)"\s*
+          $cargoMatch = [regex]::Match($cargo, '(?m)^version\s*=\s*"([^"]+)"\s*$')
+          if (-not $cargoMatch.Success -or $cargoMatch.Groups[1].Value -cne $version) {
+            throw 'Cargo.toml package version differs from app version.'
+          }
           $tag = "v$version"
           if ($env:RELEASE_REF_TYPE -eq 'tag' -and $env:RELEASE_REF_NAME -cne $tag) {
             throw "Tag $env:RELEASE_REF_NAME must match app version $tag"
