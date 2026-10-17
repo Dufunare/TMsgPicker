@@ -17,7 +17,15 @@ export interface ScanResult {
 }
 export interface Chat { id: string; title: string; kind: string; archived?: boolean; photo_file_id?: number|null; photo_big_file_id?: number|null; photo_minithumbnail?: string|null }
 export type ChatScope = 'all' | 'main' | 'archive';
-export interface Connection { profile_id: string | null; generation: number; runtime_state: string; auth_state: string; connection_state: string; detail: string; user_disconnected: boolean }
+export interface Connection {
+  profile_id: string | null;
+  generation: number;
+  runtime_state: string;
+  auth_state: string;
+  connection_state: string;
+  detail: string;
+  user_disconnected: boolean;
+}
 export type FieldName = 'views' | 'forwards' | 'comments' | 'reply_info' | 'reaction_total' | 'reaction' | 'date';
 export interface Field { kind: FieldName; emoji?: string }
 export type CompareOp = 'eq' | 'ne' | 'gt' | 'ge' | 'lt' | 'le';

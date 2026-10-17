@@ -20,6 +20,8 @@ html.settings-view, html.settings-view body, html.settings-view #app { min-width
 .settings-content label { margin:12px 0; }
 .settings-content form:not(.settings-card) > small { margin-top:8px; }
 .authorization-form { padding:12px; margin-top:14px; border-radius:var(--radius); background:var(--surface-subtle); }
+/* Submit action stays on a separate row below form helper copy. */
+.authorization-form > .authorization-actions { margin-top:12px; }
 .settings-card {
   min-width:0; margin:0 0 14px; padding:16px;
   border:1px solid var(--border-subtle); border-radius:calc(var(--radius) * .8);
@@ -59,3 +61,12 @@ html.settings-view, html.settings-view body, html.settings-view #app { min-width
 .setting-value { color:var(--text-muted); font-weight:400; }
 @media(max-width:560px) { .settings-page { padding:7px; } .settings-content { padding:12px; } .settings-card { padding:14px; } }
 @media(max-width:430px) { .settings-field-grid { grid-template-columns:1fr; } }
+
+/* QR bearer token remains in the dedicated login WebView. */
+.login-method-choice {display:flex;gap:8px;margin-bottom:14px;}
+.login-method-choice button {flex:1;}
+.login-method-choice button[aria-pressed="true"] {background:var(--accent-soft);border-color:var(--ring);color:var(--accent);}
+.qr-login {text-align:center;}
+.qr-login-code {width:min(260px,100%);margin:0 auto;background:#fff;padding:12px;border-radius:12px;}
+.qr-login-code svg {display:block;width:100%;height:auto;}
+.qr-login .buttons {justify-content:center;}

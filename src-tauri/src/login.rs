@@ -100,6 +100,18 @@ pub(super) struct LoginConfig {
     passphrase: String,
     remember_database: bool,
     recovery_profile_id: Option<String>,
+    #[serde(default)]
+    qr_login: bool,
+}
+#[derive(Serialize, Clone)]
+pub(super) struct LoginQrUpdate {
+    pub profile_id: String,
+    pub generation: u64,
+    pub link: Option<String>,
+}
+pub(super) fn valid_login_qr_link(link: &str) -> bool {
+    link.starts_with("tg://login?token=") && link.len() <= 4096
+        && link.len() > "tg://login?token=".len()
 }
 #[tauri::command]
 pub(super) async fn begin_login(app: tauri::AppHandle, config: LoginConfig) -> Result<String> {
@@ -119,7 +131,7 @@ pub(super) async fn begin_login(app: tauri::AppHandle, config: LoginConfig) -> R
         if config.passphrase.is_empty() {
             return Err("请输入数据库密码；已有 Session 必须使用原密码".into());
         }
-        if config.recovery_profile_id.is_none()
+        if config.recovery_profile_id.is_none() && !config.qr_login
             && (!config.phone.starts_with('+') || config.phone.len() < 6)
         {
             return Err("请输入包含国际区号的手机号".into());
@@ -136,12 +148,14 @@ pub(super) async fn begin_login(app: tauri::AppHandle, config: LoginConfig) -> R
         })?;
         *global.pending_login.lock().unwrap() = Some(PendingLogin {
             profile_id: id.clone(),
-            phone_submitting: !config.phone.is_empty(),
-            phone: if config.phone.is_empty() {
+            phone_submitting: !config.qr_login && !config.phone.is_empty(),
+            phone: if config.qr_login || config.phone.is_empty() {
                 None
             } else {
                 Some(config.phone)
             },
+            qr_requested: config.qr_login,
+            qr_mode: config.qr_login,
             remember_database: config.remember_database,
             newly_created: config.recovery_profile_id.is_none(),
         });
@@ -166,11 +180,16 @@ pub(super) fn login_status(s: State<AppState>) -> Result<Option<LoginStatus>> {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|p| (p.profile_id.clone(), p.phone_submitting));
+        .map(|p| (p.profile_id.clone(), p.phone_submitting, p.qr_mode));
     owner
-        .map(|(id, phone_submitting)| {
+        .map(|(id, phone_submitting, qr_mode)| {
             let connection = account(&s, &id)?.connection.lock().unwrap().clone();
+            let qr_login_link = if connection.auth_state == "authorizationStateWaitOtherDeviceConfirmation" {
+                account(&s, &id)?.qr_login_link.lock().unwrap().clone()
+            } else { None };
             Ok(LoginStatus {
+                qr_login_link,
+                qr_mode,
                 phone_submitting: phone_submitting
                     && matches!(
                         connection.auth_state.as_str(),
@@ -187,6 +206,40 @@ pub(super) struct LoginStatus {
     #[serde(flatten)]
     connection: Connection,
     phone_submitting: bool,
+    qr_mode: bool,
+    // Only returned by the pending-login command; never via global Connection.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    qr_login_link: Option<String>,
+}
+#[tauri::command]
+pub(super) async fn request_qr_login(
+    app: tauri::AppHandle, profile_id: String, generation: u64,
+) -> Result<()> {
+    background(move || {
+        let global = app.state::<AppState>();
+        let _gate = global.lifecycle.try_read()
+            .map_err(|_| "Application transition in progress")?;
+        ensure_running(&global)?;
+        if global.pending_login.lock().unwrap().as_ref()
+            .is_none_or(|p| p.profile_id != profile_id) {
+            return Err("This client is not the pending login".into());
+        }
+        let s = account(&global, &profile_id)?;
+        let _lock = s.lifecycle.try_lock()
+            .map_err(|_| "Session operation in progress")?;
+        if !current_epoch(&s, generation) || s.closing.load(Ordering::SeqCst) {
+            return Err("Login session changed; review the current step".into());
+        }
+        // Switching from code/password keeps the existing Session intact.
+        AuthService::request_qr(client(&s)?.as_ref())?;
+        if let Some(p) = global.pending_login.lock().unwrap().as_mut().filter(|p| p.profile_id == profile_id) {
+            p.qr_mode = true;
+            p.phone_submitting = false;
+            p.phone = None;
+            p.qr_requested = false;
+        }
+        Ok(())
+    }).await
 }
 #[tauri::command]
 pub(super) async fn login_auth_submit(

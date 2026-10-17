@@ -18,7 +18,7 @@ async function makeLogin(transport:Parameters<typeof useLogin>[0]){
 async function wizard(login:ReturnType<typeof useLogin>){
   const url=new URL('../src/components/LoginWizard.vue',import.meta.url);
   const {descriptor}=parse(await readFile(url,'utf8'));
-  const source=compileScript(descriptor,{id:'login-acceptance',inlineTemplate:true}).content.replace(/import \{\s*useLogin\s*\} from ['"]\.\.\/useLogin['"];?/,"import {inject} from 'vue';const useLogin=()=>inject('synthetic-login');").replace(/import AppSelect from [^;]+;/,"const AppSelect={render(){return null;}};");
+  const source=compileScript(descriptor,{id:'login-acceptance',inlineTemplate:true}).content.replace(/import \{\s*useLogin\s*\} from ['"]\.\.\/useLogin['"];?/,"import {inject} from 'vue';const useLogin=()=>inject('synthetic-login');").replace(/import AppSelect from [^;]+;/,"const AppSelect={render(){return null;}};").replace(/import \{qrcodegen\} from [^;]+;/,"const qrcodegen={QrCode:{Ecc:{MEDIUM:0},encodeText(){return {size:3,getModule(x,y){return x===y;}}}}};");
   const temporary=new URL(`.login-acceptance-${process.pid}.mjs`,url);
   await writeFile(temporary,ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText);
   try {const component=(await import(temporary.href)).default;return await renderToString(createSSRApp({setup(){provide('synthetic-login',login);return()=>h(component);}}));}
@@ -33,7 +33,19 @@ test('automatic phone submission shows a waiting screen, then code and 2FA toget
   login.updateConnection({...connection,auth_state:'authorizationStateWaitCode',detail:'请输入验证码'});
   const code=await wizard(login);assert.match(code,/Telegram 验证码/);assert.match(code,/Telegram 两步验证密码（2FA）/);assert.match(code,/验证并登录/);assert.equal(code.includes('type="tel"'),false);
   login.updateConnection({...connection,auth_state:'authorizationStateWaitPassword',detail:'请输入两步验证密码'});
-  const password=await wizard(login);assert.match(password,/Telegram 验证码/);assert.match(password,/验证码已验证/);assert.match(password,/Telegram 两步验证密码（2FA）/);
+  const password=await wizard(login);assert.doesNotMatch(password,/Telegram 验证码/);assert.doesNotMatch(password,/验证码已验证/);assert.match(password,/Telegram 两步验证密码（2FA）/);assert.match(password,/请填写 Telegram 两步验证密码以完成登录/);assert.doesNotMatch(password,/若收不到验证码/);assert.match(password,/class="buttons authorization-actions"/);
+});
+
+test('phone-code UI offers QR fallback and separate submit row without diagnostics',async()=>{
+  const transport=async(command:string)=>command==='app_settings'?fixture:undefined;
+  const login=await makeLogin(transport as Parameters<typeof useLogin>[0]);
+  login.updateConnection({...connection,auth_state:'authorizationStateWaitCode'});
+  const view=await wizard(login);
+  assert.match(view,/已启用两步验证时可同时填写密码；验证码通过后会自动继续验证。/);
+  assert.match(view,/若收不到验证码，可以尝试 QR 扫码登录。/);
+  assert.match(view,/改用 QR 扫码登录/);
+  assert.match(view,/class="buttons authorization-actions"/);
+  assert.doesNotMatch(view,/验证码投递诊断|code_type|next_type|777000/);
 });
 
 test('password errors keep the same form; retry sends only password and clears all transient credentials',async()=>{
@@ -77,4 +89,72 @@ test('new code events win over stale phone snapshots even before the pending own
   login.receiveConnection({...connection,generation:0});assert.equal(login.connection.value?.auth_state,'authorizationStateWaitCode');
   incoming='authorizationStateWaitPhoneNumber';login.updateConnection(null);await login.sync();assert.equal(login.sendingPhone.value,true);assert.equal(login.label.value,undefined);
   login.error.value='synthetic phone rejection';await login.sync();assert.equal(login.sendingPhone.value,false);assert.equal(login.label.value,'手机号（含国际区号）');
+});
+
+test('QR login starts without sending phone, and accepts only current generation QR updates',async()=>{
+  const calls:Array<{command:string;args:unknown}>=[];
+  const current={...connection,auth_state:'authorizationStateWaitOtherDeviceConfirmation'};
+  const transport=async(command:string,args?:unknown)=>{
+    calls.push({command,args});
+    if(command==='begin_login')return 'pending';
+    if(command==='login_status')return {...current,qr_login_link:'tg://login?token=mock'};
+    if(command==='app_settings')return fixture;
+  };
+  const login=await makeLogin(transport as Parameters<typeof useLogin>[0]);
+  login.loginMethod.value='qr';login.passphrase.value='synthetic password';
+  await login.begin();
+  assert.deepEqual(calls.find(c=>c.command==='begin_login')?.args,{config:{
+    phone:'',qr_login:true,passphrase:'synthetic password',remember_database:false,recovery_profile_id:null
+  }});
+  assert.equal(login.qrLink.value,'tg://login?token=mock');
+  login.receiveQr({profile_id:'pending',generation:0,link:'tg://login?token=wrong-generation'});
+  assert.equal(login.qrLink.value,'tg://login?token=mock');
+  login.receiveQr({profile_id:'pending',generation:1,link:'tg://login?token=new'});
+  assert.equal(login.qrLink.value,'tg://login?token=new');
+  const html=await wizard(login);
+  assert.match(html,/使用 Telegram 扫码登录/);
+  assert.match(html,/登录二维码/);
+  assert.match(html,/<svg/);
+  assert.doesNotMatch(html,/tg:\/\/login\?token=/);
+  login.updateConnection({...current,auth_state:'authorizationStateWaitPassword'});
+  assert.equal(login.qrLink.value,null);
+});
+test('switching existing code step to QR sends only pending profile and generation',async()=>{
+  const calls:Array<{command:string;args:unknown}>=[];
+  const transport=async(command:string,args?:unknown)=>{calls.push({command,args});if(command==='login_status')return {...connection,auth_state:'authorizationStateWaitCode'};if(command==='app_settings')return fixture;};
+  const login=await makeLogin(transport as Parameters<typeof useLogin>[0]);
+  login.updateConnection({...connection,auth_state:'authorizationStateWaitCode'});
+  await login.requestQr();
+  assert.deepEqual(calls.find(c=>c.command==='request_qr_login')?.args,{profileId:'pending',generation:1});
+});
+
+test('QR initialization hides transient phone input and switch action, then QR 2FA shows password only',async()=>{
+ const transport=async(command:string)=>command==='login_status'?{...connection,qr_mode:true,auth_state:'authorizationStateWaitPhoneNumber'}:command==='app_settings'?fixture:undefined;
+ const login=await makeLogin(transport as Parameters<typeof useLogin>[0]);
+ login.loginMethod.value='qr';login.passphrase.value='synthetic key';await login.begin();
+ const boot=await wizard(login);
+ assert.match(boot,/正在准备 QR 扫码登录/);
+ assert.doesNotMatch(boot,/改用 QR 扫码登录|请输入带国家代码的手机号|type="tel"|Telegram 验证码/);
+ assert.equal(login.qrPending.value,true);
+ login.updateConnection({...connection,qr_mode:true,auth_state:'authorizationStateWaitOtherDeviceConfirmation'});
+ const scan=await wizard(login);
+ assert.match(scan,/使用 Telegram 扫码登录/);
+ login.updateConnection({...connection,qr_mode:true,auth_state:'authorizationStateWaitPassword'});
+ const password=await wizard(login);
+ assert.match(password,/Telegram 两步验证密码（2FA）/);
+ assert.match(password,/请填写 Telegram 两步验证密码以完成登录/);
+ assert.doesNotMatch(password,/Telegram 验证码|验证码通过后|验证码已验证/);
+ assert.doesNotMatch(password,/改用 QR 扫码登录|type="tel"/);
+});
+test('server QR mode is recovered from status and takes precedence over initial phone mode',async()=>{
+ const transport=async(command:string)=>{
+   if(command==='login_status')return {...connection,qr_mode:true,auth_state:'authorizationStateWaitPhoneNumber'};
+   if(command==='app_settings')return fixture;
+ };
+ const login=await makeLogin(transport as Parameters<typeof useLogin>[0]);
+ await login.sync();
+ assert.equal(login.loginMethod.value,'qr');
+ assert.equal(login.qrPending.value,true);
+ const html=await wizard(login);
+ assert.doesNotMatch(html,/改用 QR 扫码登录|请输入带国家代码的手机号/);
 });

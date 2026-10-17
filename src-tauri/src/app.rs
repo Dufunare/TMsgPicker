@@ -68,6 +68,10 @@ struct PendingLogin {
     profile_id: String,
     phone: Option<String>,
     phone_submitting: bool,
+    qr_requested: bool,
+    // Distinct from qr_requested, which is a one-shot startup trigger.
+    // Keep the selected login method through TDLib's 2FA step.
+    qr_mode: bool,
     remember_database: bool,
     newly_created: bool,
 }
@@ -90,6 +94,8 @@ struct AccountRuntime {
     #[cfg(debug_assertions)]
     reset_pending_closed: AtomicBool,
     connection: Mutex<Connection>,
+    // Bearer token for pending QR login; NEVER include in public Connection events.
+    qr_login_link: Mutex<Option<String>>,
     active: Mutex<Option<(String, Arc<AtomicBool>)>>,
     results: Mutex<Option<ScanResult>>,
     forwarding: AtomicBool,
@@ -407,6 +413,7 @@ fn apply_connection(s: &AccountRuntime, epoch: u64, v: &Value) -> Option<(Connec
             "authorizationStateWaitTdlibParameters" => "等待 API 配置和数据库密码",
             "authorizationStateWaitPhoneNumber" => "请输入带国家代码的手机号",
             "authorizationStateWaitCode" => "请输入 Telegram 登录验证码",
+            "authorizationStateWaitOtherDeviceConfirmation" => "请使用已登录的 Telegram 手机客户端扫描二维码并确认",
             "authorizationStateWaitPassword" => "请输入 Telegram 两步验证密码",
             "authorizationStateWaitEmailAddress" => "请输入授权邮箱",
             "authorizationStateWaitEmailCode" => "请输入邮箱验证码",
@@ -471,6 +478,28 @@ fn update(app: &tauri::AppHandle, profile_id: &str, epoch: u64, v: Value) {
         {
             login.phone_submitting = false;
         }
+        if v["@type"] == "updateAuthorizationState" {
+            let qr_link = if connection.auth_state == "authorizationStateWaitOtherDeviceConfirmation" {
+                v["authorization_state"]["link"].as_str()
+                    .filter(|link| valid_login_qr_link(link))
+                    .map(str::to_owned)
+            } else {
+                None
+            };
+            *s.qr_login_link.lock().unwrap() = qr_link.clone();
+            // Only the login window may receive the ephemeral QR bearer token.
+            let is_login_owner = global.pending_login.lock().unwrap().as_ref()
+                .is_some_and(|pending| pending.profile_id == profile_id);
+            if is_login_owner {
+                if let Some(window) = app.get_webview_window("login") {
+                    let _ = window.emit("login-qr-updated", LoginQrUpdate {
+                        profile_id: profile_id.to_string(),
+                        generation: epoch,
+                        link: qr_link,
+                    });
+                }
+            }
+        }
         let _ = app.emit("connection", connection);
         if ready {
             let handle = app.clone();
@@ -489,16 +518,22 @@ fn update(app: &tauri::AppHandle, profile_id: &str, epoch: u64, v: Value) {
                 if !current_epoch(&runtime, epoch) || global.exiting.load(Ordering::SeqCst) {
                     return;
                 }
-                let phone = global
-                    .pending_login
-                    .lock()
-                    .unwrap()
-                    .as_mut()
-                    .filter(|p| p.profile_id == runtime.profile_id)
-                    .and_then(|p| p.phone.take());
-                if let Some(phone) = phone {
+                let (phone, start_qr) = {
+                    let mut pending = global.pending_login.lock().unwrap();
+                    if let Some(login) = pending.as_mut().filter(|p| p.profile_id == runtime.profile_id) {
+                        let start_qr = std::mem::take(&mut login.qr_requested);
+                        (if start_qr { None } else { login.phone.take() }, start_qr)
+                    } else {
+                        (None, false)
+                    }
+                };
+                if start_qr || phone.is_some() {
                     let outcome = client(&runtime).and_then(|g| {
-                        AuthService::submit(g.as_ref(), "authorizationStateWaitPhoneNumber", phone)
+                        if start_qr {
+                            AuthService::request_qr(g.as_ref())
+                        } else {
+                            AuthService::submit(g.as_ref(), "authorizationStateWaitPhoneNumber", phone.unwrap())
+                        }
                     });
                     if let Err(error) = outcome {
                         if let Some(login) = global
@@ -882,6 +917,7 @@ fn finish_close(s: &AccountRuntime, outcome: Result<()>) -> Result<Connection> {
         progress.closed = true;
     }
     *s.gateway.lock().unwrap() = None;
+    *s.qr_login_link.lock().unwrap() = None;
     s.epoch.fetch_add(1, Ordering::SeqCst);
     let c = Connection {
         profile_id: Some(s.profile_id.clone()),
@@ -1566,6 +1602,43 @@ mod tests {
                 .is_empty()
         );
     }
+    #[test]
+    fn authorization_updates_do_not_expose_raw_code_payloads() {
+        let runtime = AccountRuntime {
+            profile_id: "test-login".into(),
+            ..AccountRuntime::default()
+        };
+        let state = json!({
+            "@type": "updateAuthorizationState",
+            "authorization_state": {
+                "@type": "authorizationStateWaitCode",
+                "code_info": {
+                    "@type": "authenticationCodeInfo",
+                    "phone_number": "+8000111222333",
+                    "type": {"@type": "authenticationCodeTypeTelegramMessage", "length": 5},
+                    "next_type": null,
+                    "timeout": 0
+                }
+            }
+        });
+        let (connection, ready) = apply_connection(&runtime, 0, &state).unwrap();
+        assert!(!ready);
+        assert_eq!(connection.auth_state, "authorizationStateWaitCode");
+        let serialized = serde_json::to_string(&connection).unwrap();
+        assert!(!serialized.contains("+8000111222333"));
+        assert!(!serialized.contains("authenticationCodeTypeTelegramMessage"));
+        assert!(!serialized.contains("code_info"));
+        let (connected, _) = apply_connection(
+            &runtime, 0,
+            &json!({"@type":"updateConnectionState",
+                "state":{"@type":"connectionStateReady"}}),
+        ).unwrap();
+        assert_eq!(connected.auth_state, "authorizationStateWaitCode");
+        assert_eq!(connected.connection_state, "connectionStateReady");
+        runtime.epoch.store(1, Ordering::SeqCst);
+        assert!(apply_connection(&runtime, 0, &state).is_none());
+    }
+
     #[test]
     fn authorization_network_lock_errors_and_generations_are_orthogonal() {
         let a = AccountRuntime {
@@ -2365,6 +2438,7 @@ pub fn run() {
             open_login,
             begin_login,
             login_status,
+            request_qr_login,
             login_auth_submit,
             retry_login_identity,
             cancel_login,
