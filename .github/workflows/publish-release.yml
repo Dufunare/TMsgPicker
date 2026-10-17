@@ -1,9 +1,8 @@
 name: Publish validated Release
 on:
   push:
-    branches: [main]
-    paths:
-      - "scripts/publish-intent.json"
+    tags:
+      - "v0.2.0"
 permissions:
   contents: write
   actions: read
@@ -25,7 +24,7 @@ jobs:
             const {tag, commit, release_id: releaseId} = intent;
             if (tag !== 'v0.2.0' || commit !== '229fd56cc630ea1092eea12e633a81b9311553f0' || releaseId !== 415631369)
               throw new Error('Unexpected release intent. Manual review required for new versions.');
-            if (context.ref !== 'refs/heads/main') throw new Error('Publish must run on main.');
+            if (context.ref !== 'refs/tags/' + tag) throw new Error('Publish only by a manually pushed matching version tag.');
             const built = await github.rest.actions.getWorkflowRun({
               owner,repo,run_id:39006433438
             });
@@ -46,24 +45,14 @@ jobs:
             const matches = await github.paginate(github.rest.repos.listReleases,{owner,repo,per_page:100});
             if (matches.filter(r=>r.tag_name===tag).length!==1)
               throw new Error('Duplicate Release for this tag.');
-            let ref;
-            try {ref=(await github.rest.git.getRef({owner,repo,ref:'tags/'+tag})).data;}
-            catch(e){if(e.status!==404)throw e;}
-            if(ref){
-              let actual=ref.object.sha;
-              if(ref.object.type==='tag'){
-                const t=await github.rest.git.getTag({owner,repo,tag_sha:actual});
-                actual=t.data.object.sha;
-              }
-              if(actual!==commit)throw new Error('Existing tag targets a different commit.');
-            }else{
-              const t=await github.rest.git.createTag({
-                owner,repo,tag,object:commit,type:'commit',
-                message:'TMsgPicker v0.2.0 - verified Windows x64 release'
-              });
-              await github.rest.git.createRef({owner,repo,ref:'refs/tags/'+tag,sha:t.data.sha});
-              core.info('Created tag '+tag+' -> '+commit);
+            const ref = (await github.rest.git.getRef({owner,repo,ref:'tags/'+tag})).data;
+            let actual=ref.object.sha;
+            if(ref.object.type==='tag'){
+              const t=await github.rest.git.getTag({owner,repo,tag_sha:actual});
+              actual=t.data.object.sha;
             }
+            if(actual!==commit)throw new Error('Tag points at a DIFFERENT commit. Do not move tags.');
+
             if(release.draft){
               await github.rest.repos.updateRelease({
                 owner,repo,release_id:releaseId,

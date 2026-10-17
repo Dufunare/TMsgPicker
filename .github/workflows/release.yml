@@ -14,8 +14,6 @@ on:
     # Tag pushes remain supported, e.g. for legacy/manual releases.
     branches:
       - main
-    tags:
-      - 'v*'
     paths:
       - "scripts/release-intent.json"
 
