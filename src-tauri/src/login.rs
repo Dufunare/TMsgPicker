@@ -155,6 +155,7 @@ pub(super) async fn begin_login(app: tauri::AppHandle, config: LoginConfig) -> R
                 Some(config.phone)
             },
             qr_requested: config.qr_login,
+            qr_mode: config.qr_login,
             remember_database: config.remember_database,
             newly_created: config.recovery_profile_id.is_none(),
         });
@@ -179,15 +180,16 @@ pub(super) fn login_status(s: State<AppState>) -> Result<Option<LoginStatus>> {
         .lock()
         .unwrap()
         .as_ref()
-        .map(|p| (p.profile_id.clone(), p.phone_submitting));
+        .map(|p| (p.profile_id.clone(), p.phone_submitting, p.qr_mode));
     owner
-        .map(|(id, phone_submitting)| {
+        .map(|(id, phone_submitting, qr_mode)| {
             let connection = account(&s, &id)?.connection.lock().unwrap().clone();
             let qr_login_link = if connection.auth_state == "authorizationStateWaitOtherDeviceConfirmation" {
                 account(&s, &id)?.qr_login_link.lock().unwrap().clone()
             } else { None };
             Ok(LoginStatus {
                 qr_login_link,
+                qr_mode,
                 phone_submitting: phone_submitting
                     && matches!(
                         connection.auth_state.as_str(),
@@ -204,6 +206,7 @@ pub(super) struct LoginStatus {
     #[serde(flatten)]
     connection: Connection,
     phone_submitting: bool,
+    qr_mode: bool,
     // Only returned by the pending-login command; never via global Connection.
     #[serde(skip_serializing_if = "Option::is_none")]
     qr_login_link: Option<String>,
@@ -228,7 +231,14 @@ pub(super) async fn request_qr_login(
             return Err("Login session changed; review the current step".into());
         }
         // Switching from code/password keeps the existing Session intact.
-        AuthService::request_qr(client(&s)?.as_ref())
+        AuthService::request_qr(client(&s)?.as_ref())?;
+        if let Some(p) = global.pending_login.lock().unwrap().as_mut().filter(|p| p.profile_id == profile_id) {
+            p.qr_mode = true;
+            p.phone_submitting = false;
+            p.phone = None;
+            p.qr_requested = false;
+        }
+        Ok(())
     }).await
 }
 #[tauri::command]
