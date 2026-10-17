@@ -154,7 +154,7 @@ v0.1.x 优先稳定 NSIS/ZIP、真实登录/代理/Session 与 DLL 包装；保�
 
 - Windows 构建成功时创建 Draft Release 和 Assets，但不创建 Tag。
 - 本地测试通过后，维护者在自己的 Git 工作区创建 **annotated tag**，指向实际构建的 Commit，而非当前最新的 main。
-- 推送 `v0.2.0` 后触发 `.github/workflows/publish-release.yml`：验证构建、Tag SHA、唯一 Draft Release、五个 Assets，再将已有 Draft 发布为正式 Latest 版本；不会创建新的 Release，也不重新构建安装器。
+- 首次补建 `v0.2.0` Tag 后，在 `main` 更新 `scripts/publish-intent.json` 的 `retry` 字段以触发 `.github/workflows/publish-release.yml`：验证构建、Tag SHA、唯一 Draft Release、五个 Assets，再将已有 Draft 发布为正式 Latest。对本次旧版 Tag 构建另设置 `workflow_run` 收尾检查，以防后续重置 Draft。未来发版可按版本更新发布意图。
 - Git Tag 永远不能重指向其他提交；发布之后需要修复则递增 patch 版本。
 - 保留 `v0.1.0` Tag 和其历史 Draft Release；它们按版本号配对。如果以后决定只保留公开的正式版本，可单独处置旧 Draft 和旧 Tag，必须成对操作。
 

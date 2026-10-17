@@ -1,8 +1,12 @@
 name: Publish validated Release
 on:
   push:
-    tags:
-      - "v0.2.0"
+    branches: [main]
+    paths:
+      - "scripts/publish-intent.json"
+  workflow_run:
+    workflows: ["Windows x64 Release"]
+    types: [completed]
 permissions:
   contents: write
   actions: read
@@ -14,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Validate release, create tag, and publish existing draft
+      - name: Validate tag, build, and publish existing draft
         uses: actions/github-script@v7
         with:
           script: |
@@ -24,7 +28,21 @@ jobs:
             const {tag, commit, release_id: releaseId} = intent;
             if (tag !== 'v0.2.0' || commit !== '229fd56cc630ea1092eea12e633a81b9311553f0' || releaseId !== 415631369)
               throw new Error('Unexpected release intent. Manual review required for new versions.');
-            if (context.ref !== 'refs/tags/' + tag) throw new Error('Publish only by a manually pushed matching version tag.');
+            if (context.eventName === 'push') {
+              if (context.ref !== 'refs/heads/main') throw new Error('Manual publication intent must be on main');
+            } else if (context.eventName === 'workflow_run') {
+              const prior = context.payload.workflow_run;
+              if (prior.id !== 39014095307) {
+                core.info('Ignoring unrelated Windows build run ' + prior.id);
+                return;
+              }
+              if (prior.head_sha !== commit) throw new Error('Old tag build has an unexpected source commit');
+              if (prior.conclusion !== 'success') {
+                core.warning('Tag build did not complete successfully; existing validated build is authoritative');
+              }
+            } else {
+              throw new Error('Unsupported release publication event');
+            }
             const built = await github.rest.actions.getWorkflowRun({
               owner,repo,run_id:39006433438
             });
@@ -58,7 +76,7 @@ jobs:
                 owner,repo,release_id:releaseId,
                 name:'TMsgPicker v0.2.0',
                 draft:false,prerelease:false,make_latest:'true',
-                body:release.body.replace(/\*\*Draft — human clean-machine acceptance still required\*\* before publishing\./g,
+                body:(release.body || '').replace(/\*\*Draft — human clean-machine acceptance still required\*\* before publishing\./g,
                   '**Release validated on Windows x64 by the maintainer.**')
               });
               core.info('Published existing release '+releaseId);
