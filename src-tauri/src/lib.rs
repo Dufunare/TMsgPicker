@@ -2,6 +2,9 @@
 mod app;
 pub mod core;
 pub mod formatted_text;
+// Available to desktop runtime; also included in no-default-features unit
+// tests without creating unused-code warnings in the production core library.
+#[cfg(any(feature = "desktop", test))]
 mod login_code_diagnostics;
 pub mod scan;
 pub mod gateway;
