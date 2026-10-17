@@ -33,59 +33,19 @@ test('automatic phone submission shows a waiting screen, then code and 2FA toget
   login.updateConnection({...connection,auth_state:'authorizationStateWaitCode',detail:'请输入验证码'});
   const code=await wizard(login);assert.match(code,/Telegram 验证码/);assert.match(code,/Telegram 两步验证密码（2FA）/);assert.match(code,/验证并登录/);assert.equal(code.includes('type="tel"'),false);
   login.updateConnection({...connection,auth_state:'authorizationStateWaitPassword',detail:'请输入两步验证密码'});
-  const password=await wizard(login);assert.doesNotMatch(password,/Telegram 验证码/);assert.doesNotMatch(password,/验证码已验证/);assert.match(password,/Telegram 两步验证密码（2FA）/);
+  const password=await wizard(login);assert.doesNotMatch(password,/Telegram 验证码/);assert.doesNotMatch(password,/验证码已验证/);assert.match(password,/Telegram 两步验证密码（2FA）/);assert.match(password,/请填写 Telegram 两步验证密码以完成登录/);assert.doesNotMatch(password,/若收不到验证码/);assert.match(password,/class="buttons authorization-actions"/);
 });
 
-test('TDLib Telegram-message delivery metadata is visible, with no phone number or code exposed',async()=>{
+test('phone-code UI offers QR fallback and separate submit row without diagnostics',async()=>{
   const transport=async(command:string)=>command==='app_settings'?fixture:undefined;
   const login=await makeLogin(transport as Parameters<typeof useLogin>[0]);
-  login.updateConnection({
-    ...connection,
-    auth_state:'authorizationStateWaitCode',
-    detail:'请输入 Telegram 登录验证码',
-    code_diagnostics:{
-      code_info_received:true,
-      code_type:'authenticationCodeTypeTelegramMessage',
-      next_code_type:null,
-      timeout_seconds:0,
-      length:5
-    }
-  });
-  const displayed=await wizard(login);
-  assert.match(displayed,/TDLib 验证码投递诊断/);
-  assert.match(displayed,/已登录的 Telegram 客户端内消息/);
-  assert.match(displayed,/authenticationCodeTypeTelegramMessage/);
-  assert.match(displayed,/服务端未提供（next_type = null）/);
-  assert.match(displayed,/0 秒（状态快照）/);
-  assert.match(displayed,/5 位/);
-  assert.match(displayed,/777000/);
-  assert.doesNotMatch(displayed,/phone_number|phone_code_hash|\+810000000000/);
-  assert.doesNotMatch(displayed,/重新发送/); // No resend operation is added.
-
-  // Switching to password/other authorization states removes stale code data.
-  login.updateConnection({...connection,auth_state:'authorizationStateWaitPassword'});
-  const next=await wizard(login);
-  assert.doesNotMatch(next,/TDLib 验证码投递诊断/);
-});
-
-test('missing TDLib code_info has an explicit diagnostic instead of assuming SMS delivery',async()=>{
-  const transport=async(command:string)=>command==='app_settings'?fixture:undefined;
-  const login=await makeLogin(transport as Parameters<typeof useLogin>[0]);
-  login.updateConnection({
-    ...connection,
-    auth_state:'authorizationStateWaitCode',
-    code_diagnostics:{
-      code_info_received:false,
-      code_type:null,
-      next_code_type:null,
-      timeout_seconds:null,
-      length:null
-    }
-  });
+  login.updateConnection({...connection,auth_state:'authorizationStateWaitCode'});
   const view=await wizard(login);
-  assert.match(view,/没有收到有效的/);
-  assert.match(view,/code_info/);
-  assert.doesNotMatch(view,/本次投递渠道/);
+  assert.match(view,/已启用两步验证时可同时填写密码；验证码通过后会自动继续验证。/);
+  assert.match(view,/若收不到验证码，可以尝试 QR 扫码登录。/);
+  assert.match(view,/改用 QR 扫码登录/);
+  assert.match(view,/class="buttons authorization-actions"/);
+  assert.doesNotMatch(view,/验证码投递诊断|code_type|next_type|777000/);
 });
 
 test('password errors keep the same form; retry sends only password and clears all transient credentials',async()=>{
@@ -116,12 +76,7 @@ test('new code events win over stale phone snapshots even before the pending own
   const transport=async(command:string)=>{
     if(command==='begin_login')return 'pending';
     if(command==='login_status'){
-      login.receiveConnection({...connection,auth_state:incoming,detail:'synthetic authorization state',
-        ...(incoming==='authorizationStateWaitCode'?{code_diagnostics:{
-          code_info_received:true,code_type:'authenticationCodeTypeTelegramMessage',
-          next_code_type:null,timeout_seconds:12,length:5
-        }}:{})
-      });
+      login.receiveConnection({...connection,auth_state:incoming,detail:'synthetic authorization state'});
       login.receiveConnection({...connection,profile_id:'another account',auth_state:'authorizationStateReady'});
       return {...connection,phone_submitting:true}; // Captured before the newer code event.
     }
@@ -129,10 +84,8 @@ test('new code events win over stale phone snapshots even before the pending own
   };
   login=await makeLogin(transport as Parameters<typeof useLogin>[0]);
   await login.sync();assert.equal(login.connection.value?.auth_state,'authorizationStateWaitCode');assert.equal(login.combinedAuth.value,true);assert.equal(login.sendingPhone.value,false);
-  assert.equal(login.connection.value?.code_diagnostics?.code_type,'authenticationCodeTypeTelegramMessage');
   login.updateConnection(null);login.phone.value='+123456789';login.passphrase.value='synthetic password';await login.begin();
   assert.equal(login.connection.value?.auth_state,'authorizationStateWaitCode');assert.equal(login.sendingPhone.value,false);
-  assert.equal(login.connection.value?.code_diagnostics?.timeout_seconds,12);
   login.receiveConnection({...connection,generation:0});assert.equal(login.connection.value?.auth_state,'authorizationStateWaitCode');
   incoming='authorizationStateWaitPhoneNumber';login.updateConnection(null);await login.sync();assert.equal(login.sendingPhone.value,true);assert.equal(login.label.value,undefined);
   login.error.value='synthetic phone rejection';await login.sync();assert.equal(login.sendingPhone.value,false);assert.equal(login.label.value,'手机号（含国际区号）');

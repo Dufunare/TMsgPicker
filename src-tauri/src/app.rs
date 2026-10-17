@@ -1,4 +1,3 @@
-use crate::login_code_diagnostics::LoginCodeDiagnostics;
 use crate::services::ChatListScope;
 use crate::settings::{AppearancePreferences, Settings, Snapshot, Store};
 use crate::settings_target::SettingsTarget;
@@ -37,8 +36,6 @@ struct Connection {
     connection_state: String,
     detail: String,
     user_disconnected: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    code_diagnostics: Option<LoginCodeDiagnostics>,
 }
 impl Default for Connection {
     fn default() -> Self {
@@ -50,7 +47,6 @@ impl Default for Connection {
             connection_state: "Disconnected".into(),
             detail: "请输入配置并连接".into(),
             user_disconnected: false,
-            code_diagnostics: None,
         }
     }
 }
@@ -400,12 +396,6 @@ fn apply_connection(s: &AccountRuntime, epoch: u64, v: &Value) -> Option<(Connec
             .as_str()
             .unwrap_or("Unknown")
             .into();
-        // Deliver only safe metadata from authenticationCodeInfo to the login
-        // UI. It contains a phone_number that must never cross this IPC.
-        connection.code_diagnostics =
-            (connection.auth_state == "authorizationStateWaitCode").then(|| {
-                LoginCodeDiagnostics::from_wait_code(&v["authorization_state"])
-            });
         if connection.runtime_state != "NeedsDatabasePassphrase"
             && connection.runtime_state != "Error"
         {
@@ -1613,7 +1603,7 @@ mod tests {
         );
     }
     #[test]
-    fn code_diagnostics_survives_network_updates_and_clears_on_auth_change() {
+    fn authorization_updates_do_not_expose_raw_code_payloads() {
         let runtime = AccountRuntime {
             profile_id: "test-login".into(),
             ..AccountRuntime::default()
@@ -1634,29 +1624,17 @@ mod tests {
         let (connection, ready) = apply_connection(&runtime, 0, &state).unwrap();
         assert!(!ready);
         assert_eq!(connection.auth_state, "authorizationStateWaitCode");
-        assert_eq!(connection.code_diagnostics.as_ref().unwrap().length, Some(5));
         let serialized = serde_json::to_string(&connection).unwrap();
         assert!(!serialized.contains("+8000111222333"));
-        assert!(serialized.contains("authenticationCodeTypeTelegramMessage"));
-
-        // A connectionState change must NOT overwrite code_info diagnostics.
+        assert!(!serialized.contains("authenticationCodeTypeTelegramMessage"));
+        assert!(!serialized.contains("code_info"));
         let (connected, _) = apply_connection(
-            &runtime,
-            0,
+            &runtime, 0,
             &json!({"@type":"updateConnectionState",
                 "state":{"@type":"connectionStateReady"}}),
-        )
-        .unwrap();
-        assert_eq!(connected.code_diagnostics, connection.code_diagnostics);
-
-        let (password, _) = apply_connection(
-            &runtime,
-            0,
-            &json!({"@type":"updateAuthorizationState",
-                "authorization_state":{"@type":"authorizationStateWaitPassword"}}),
-        )
-        .unwrap();
-        assert!(password.code_diagnostics.is_none());
+        ).unwrap();
+        assert_eq!(connected.auth_state, "authorizationStateWaitCode");
+        assert_eq!(connected.connection_state, "connectionStateReady");
         runtime.epoch.store(1, Ordering::SeqCst);
         assert!(apply_connection(&runtime, 0, &state).is_none());
     }
