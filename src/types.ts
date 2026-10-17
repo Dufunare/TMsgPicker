@@ -17,7 +17,25 @@ export interface ScanResult {
 }
 export interface Chat { id: string; title: string; kind: string; archived?: boolean; photo_file_id?: number|null; photo_big_file_id?: number|null; photo_minithumbnail?: string|null }
 export type ChatScope = 'all' | 'main' | 'archive';
-export interface Connection { profile_id: string | null; generation: number; runtime_state: string; auth_state: string; connection_state: string; detail: string; user_disconnected: boolean }
+/** A strictly allowlisted, privacy-minimal projection of TDLib authenticationCodeInfo. */
+export interface LoginCodeDiagnostics {
+  code_info_received: boolean;
+  code_type: string | null;
+  next_code_type: string | null;
+  timeout_seconds: number | null;
+  length: number | null;
+}
+export interface Connection {
+  profile_id: string | null;
+  generation: number;
+  runtime_state: string;
+  auth_state: string;
+  connection_state: string;
+  detail: string;
+  user_disconnected: boolean;
+  /** Present only in authorizationStateWaitCode; omitted for other states. */
+  code_diagnostics?: LoginCodeDiagnostics | null;
+}
 export type FieldName = 'views' | 'forwards' | 'comments' | 'reply_info' | 'reaction_total' | 'reaction' | 'date';
 export interface Field { kind: FieldName; emoji?: string }
 export type CompareOp = 'eq' | 'ne' | 'gt' | 'ge' | 'lt' | 'le';

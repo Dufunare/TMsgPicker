@@ -2,6 +2,7 @@
 mod app;
 pub mod core;
 pub mod formatted_text;
+mod login_code_diagnostics;
 pub mod scan;
 pub mod gateway;
 pub mod services;
