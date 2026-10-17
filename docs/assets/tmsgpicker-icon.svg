@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="TMsgPicker app icon">
+  <defs>
+    <linearGradient id="surface" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0982FF"/>
+      <stop offset=".48" stop-color="#1650F6"/>
+      <stop offset="1" stop-color="#2D0CD6"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="496" height="496" rx="103" fill="url(#surface)"/>
+  <g fill="none" stroke="#FFF" stroke-width="29" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M371 233C369 162 312 108 240 108C166 108 110 165 110 240C110 279 124 309 136 328C141 336 138 343 134 351L116 398L178 376C217 399 265 404 306 382"/>
+  </g>
+  <g fill="none" stroke="#FFF" stroke-linecap="round">
+    <path stroke-width="22" d="M179 208H302"/>
+    <path stroke-width="18" d="M179 252H239"/>
+    <path stroke-width="18" d="M179 291H225"/>
+  </g>
+  <path d="M280 246H405C421 246 424 260 414 270L359 326C355 330 354 334 354 341V387C354 409 332 409 332 387V341C332 334 330 330 326 326L272 270C262 260 265 246 280 246Z" fill="#FFF"/>
+</svg>

@@ -1,6 +1,6 @@
 # TMsgPicker 架构与设计决策
 
-> **基线**：v0.1，依据 2026-10-16 的 `main` 源码整理。本文描述**当前实现**，不是尚待实现的产品规格。日常安装/操作参见仓库 [README](../README.md)，文件与模块细节参见 [projects.md](projects.md)，已经替换的历史方案参见 [Devlog.md](Devlog.md)。
+> **基线**：v0.2.0，更新于 2026-10-17，依据 `main` 合并的 QR 登录与发布功能整理。本文描述**当前实现**，不是尚待实现的产品规格。日常安装/操作参见仓库 [README](../README.md)，文件与模块细节参见 [projects.md](projects.md)，已经替换的历史方案参见 [Devlog.md](Devlog.md)。
 
 ## 1. 目标、边界与关键决策
 
@@ -219,7 +219,7 @@ tdlib/{db,files}/         旧版本 Legacy 数据（按需保留）
 | 类别 | 代表命令 / 事件 | 保护条件 |
 |---|---|---|
 | 账号状态 | `account_statuses`、`connection_status`、`connection` | 指定 Profile，事件带 generation |
-| 登录 | `open_login`、`begin_login`、`login_auth_submit`、`cancel_login` | PendingLogin 身份与授权状态校验，Ready + getMe 才登记 |
+| 登录 | `open_login`、`begin_login`、`request_qr_login`、`login_auth_submit`、`cancel_login` | PendingLogin 身份与授权状态校验，Ready + getMe 才登记 |
 | 全局设置 | `app_settings`、`save_settings`、`clear_secret` | DPAPI 秘密不回填；全局配置更新安全关闭/重建 Client |
 | 外观与导航 | `open_settings`、`settings_target`、`preview_appearance`、`save_appearance`、`appearance-changed` | 设置窗口作用域、revision / editor 防迟到覆盖 |
 | 聊天与扫描 | `chats`、`public_chat`、`start_query`、`cancel_query`、`release_query`、`query-progress` | Profile + chat + run + epoch 校验 |
@@ -257,3 +257,10 @@ tdlib/{db,files}/         旧版本 Legacy 数据（按需保留）
 **CI 安全界限**：Pull Request 只静态解析 PowerShell 和执行已有离线检查；手动 workflow_dispatch 可构建发行资产但不创建公开 Release。只有匹配 Tauri 版本的 `vX.Y.Z` tag 才启动 Draft/Prerelease 生成，随后必须由人完成干净 Windows x64 安装、升级/卸载、Session 完整性和版权审查。发行构建**没有 Telegram 开发者 API Hash 变量注入**，用户始终自带 API ID/Hash。
 
 **可复现级别**：锁定 TDLib/vcpkg 源码提交与 port 版本并记录构建文件 SHA-256；目前没有完全锁定 MSVC/CMake/Windows runner 补丁版本，因此不声称产物可逐字节重复。许可证、签名与发布审核详见 [RELEASE.md](RELEASE.md)，构建步骤详见 [BUILD_WINDOWS.md](BUILD_WINDOWS.md)。
+
+
+## 11. v0.2.0 QR 登录与发行资产
+
+登录的 `PendingLogin` 与常规正式账号相互隔离。前端可选择手机号或 QR 扫码，使用 TDLib `requestQrCodeAuthentication` 请求扫码链接。QR 授权链接作为 bearer token，仅存放在待登录账号运行时，通过 **登录窗口事件和专用状态命令**发送，不经过全局 `connection` 广播；完成扫码仍使用正常的 `authorizationStateWaitPassword` 处理 2FA，Ready 后再通过 `getMe` 确认身份与登记。
+
+程序标识采用 `docs/assets/tmsgpicker-icon.svg`，生成的图标资源位于 `src-tauri/icons/`。主分支明确的发布意图触发 Windows x64 构建，生成单体 Setup/Portable Assets 和整套构建产物 ZIP，构建合格后才创建版本标签，Draft 状态保留人工清洁机验收。

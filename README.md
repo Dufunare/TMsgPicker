@@ -1,378 +1,149 @@
+<div align="center">
+
+<img src="docs/assets/tmsgpicker-icon.svg" alt="TMsgPicker icon — messages and filter" width="116" height="116">
+
 # TMsgPicker
 
-**TMsgPicker** 是面向 Telegram 历史消息的本地桌面检索与浏览工具：使用用户自己的 Telegram 账号，通过 TDLib 读取聊天历史，将媒体组组织为一个 `Post`，再按互动指标、内容类型和组合条件筛选、排序与查看。
+**把 Telegram 消息整理成可搜索、可筛选的 Post。**
 
-- **平台**：目前针对 Windows x64 开发；技术栈为 Tauri 2、Vue 3 / TypeScript、Rust（edition 2024）、TDLib JSON C API。
-- **账号与网络**：支持多账号、独立 Session、SOCKS5 代理、现有 Session 恢复。
-- **隐私与 API**：没有内置共享 Telegram API ID/Hash；用户须自行申请。TDLib 和检索主要在本机运行，不需要本项目的业务服务器。
-- **版本状态**：v0.1 开发期代码。仓库有本地构建与离线测试入口；正式 Windows 安装包、可移植版与真实环境全场景验收尚不应视为已完成。
+*A local-first Telegram post browser and visual query builder.*
 
-这不是 Telegram 官方客户端，也不是功能完整的聊天客户端、Telegram Bot 或 Mini App。不要用它代替 Telegram 官方应用处理全部聊天与账号事务。
+[![Version](https://img.shields.io/badge/version-v0.2.0-3059df)](https://github.com/Dufunare/TMsgPicker/releases)
+[![Windows](https://img.shields.io/badge/platform-Windows%20x64-1765d7)](docs/BUILD_WINDOWS.md)
+[![Frontend UI](https://github.com/Dufunare/TMsgPicker/actions/workflows/frontend-ui.yml/badge.svg)](https://github.com/Dufunare/TMsgPicker/actions/workflows/frontend-ui.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-228a7a)](LICENSE)
 
-**许可证**：本项目采用 [MIT License](LICENSE)（Copyright © 2026 Dufunare）；TDLib、OpenSSL、zlib 及 Microsoft 运行时仍分别遵守各自许可与再分发条款。
+[**下载 Release**](https://github.com/Dufunare/TMsgPicker/releases) · [快速开始](#快速开始) · [完整使用指南](docs/USER_GUIDE.md) · [构建说明](docs/BUILD_WINDOWS.md)
 
-**文档导航**：[架构与决策](docs/ARCHITECTURE.md) · [功能与源码文件导览](docs/projects.md) · [开发日志](docs/Devlog.md) · [Windows/TDLib 源码构建](docs/BUILD_WINDOWS.md) · [发布与验收流程](docs/RELEASE.md)
+</div>
 
-## 目录
+---
 
-- [快速上手与构建](#快速上手与构建)
-- [申请与配置 Telegram API](#申请与配置-telegram-api)
-- [SOCKS5 代理](#socks5-代理)
-- [登录与多账号](#登录与多账号)
-- [界面与查询面板](#界面与查询面板)
-- [结果、媒体与消息操作](#结果媒体与消息操作)
-- [设置选项](#设置选项)
-- [常见异常与处理](#常见异常与处理)
-- [本地数据、安全及当前限制](#本地数据安全及当前限制)
-- [固定 TDLib 依赖与 Windows 发布](#固定-tdlib-依赖与-windows-发布)
-- [测试与参与开发](#测试与参与开发)
+TMsgPicker 通过 **TDLib** 使用你自己的 Telegram 账号访问历史消息，把相册消息合并成 `Post`，并提供可视化条件编辑器，让你根据浏览、转发、评论、Reaction、媒体类型和时间范围快速找到目标内容。
 
-## 快速上手与构建
+它是专注于**浏览、检索与整理**的独立桌面工具，而不是 Telegram 官方客户端、Bot 或 Mini App。
 
-### 运行前需要准备什么
+## 为什么使用 TMsgPicker？
 
-目前源码构建针对 **Windows x64 + MSVC**。准备：
+| | 功能 | 说明 |
+|:--:|---|---|
+| 💬 | **Post 优先** | 单消息 / 媒体组统一检索，媒体组不被拆成零散结果 |
+| 🔎 | **可视化 Query Builder** | 按浏览量、转发数、评论、指定 Emoji 反应、内容类型组合过滤，支持 AND / OR / NOT |
+| 🖼️ | **媒体与指标预览** | 文本、链接、图片/缩略图和 Post 级互动指标，单媒体悬停可查看该条消息的浏览和转发 |
+| 🔐 | **账号与 Session** | 独立多账号会话、**QR 扫码登录**、手机号验证码、Telegram 2FA、已有本地数据库恢复 |
+| 🖥️ | **本地优先** | Rust + TDLib 在本机处理查询，无本项目业务服务器；可选全局 SOCKS5 代理 |
+| 🎛️ | **桌面界面** | Tauri 2 + Vue 3，三栏布局、可调整栏宽、主题及 Windows Glass 风格 |
 
-1. Windows WebView2 Runtime（多数较新的 Windows 系统已具备）。
-2. Node.js（建议 24，或满足当前 TypeScript/Node 测试要求的版本）与 pnpm 10。
-3. Rust 稳定版工具链（支持 Rust 2024 edition）、Visual Studio 的 MSVC C++ Build Tools 和 Windows SDK。
-4. **与当前编译配置匹配的 TDLib x64 构建产物**：`tdjson.lib`、`tdjson.dll`、`libssl-3-x64.dll`、`libcrypto-3-x64.dll`，以及实际生成的 `z.dll` 或 `zlib1.dll`。无需自行寻找预编译 DLL，可使用下面的固定依赖构建脚本。
+> **当前范围**：Windows x64 预览版。尚不提供完整 Telegram 聊天客户端、全量持续索引、完整视频播放器或批量转发的图形操作入口；具体限制见[使用指南](docs/USER_GUIDE.md)。
 
-**依赖说明**：已经提供 `scripts/build-tdlib.ps1` 来检出固定版本 TDLib/vcpkg、构建 OpenSSL/zlib/gperf 和 TDLib。普通用户运行发行物不需要 CMake/gperf/MSVC/Rust/pnpm；`.lib` 是 MSVC 链接导入库，最终用户不需要。CI 可以生成 NSIS 和 Portable ZIP，但**只有正式发布且完成人工干净机验收的 Release**才可被视为已交付产品。详情见 [源码构建](docs/BUILD_WINDOWS.md) 和 [发布流程](docs/RELEASE.md)。
+## 快速开始
 
-### Windows 源码启动
+### 1. 获取程序
 
-在 PowerShell 中，从仓库根目录执行：
+从 [GitHub Releases](https://github.com/Dufunare/TMsgPicker/releases) 获取对应版本的 Windows x64 构建：
+
+| 文件 | 用途 |
+|---|---|
+| `TMsgPicker-Setup-x64.exe` | Windows NSIS 安装器 |
+| `TMsgPicker-Portable-x64.zip` | 解压即用的便携版，含必要的原生 DLL 与许可证 |
+| `TMsgPicker-Windows-x64-Artifacts.zip` | 将安装器、便携版和依赖来源清单打包在一起的 **Release 构建产物合集** |
+| `SHA256SUMS.txt` | 上述构建文件和依赖清单的 SHA-256 |
+| `native-dependencies.json` | 本次构建使用的原生依赖来源信息 |
+
+Release 首先生成 **Draft / Prerelease**，须人工验收后才公开发布。未签名的安装包可能触发 Windows SmartScreen 提示；不要绕过自己不信任的安全警告。便携版依赖系统中的 **WebView2 Runtime**。
+
+### 2. 准备 Telegram API 凭据
+
+TMsgPicker **不内置共享 API ID / API Hash**。请前往 [my.telegram.org](https://my.telegram.org) 的 **API development tools**，使用自己的账号创建 API 应用，然后在 **应用设置 → API 与代理** 中填写凭据。
+
+按网络环境需要，可在同一页面配置 SOCKS5 代理。API Hash 和代理密码保存在本地，并使用 Windows DPAPI 保护。
+
+### 3. 添加账号
+
+点击 **添加账号**，选择任一授权方式：
+
+- **QR 扫码**：设置本地 Session 数据库密码 → 开始登录 → 用已登录的 Telegram 手机端在 **设置 → 设备 → 连接桌面设备** 扫码并确认。
+- **手机号**：输入含国际区号的手机号 → 接收并填写 Telegram 登录验证码；如果验证码迟迟不到，可尝试 QR 扫码。
+- 如果 Telegram 账号启用了 **2FA**，按提示输入 Telegram 两步验证密码。
+
+**本地数据库密码 ≠ Telegram 2FA 密码。** 数据库密码用于保护与恢复该账号在本机的 TDLib Session；忘记它可能导致本地 Session 无法恢复。可选择使用 Windows DPAPI 记住本设备。
+
+### 4. 组合一个查询
+
+在左侧选定聊天，右侧设置扫描范围与条件，中间查看结果。例如：
+
+```text
+最近 500 个 Post
+  AND  浏览量 >= 1,000
+  AND  内容包含视频
+  AND  内容不包含图片
+  SORT 浏览量降序
+```
+
+**重要语义**：扫描范围中的 N 是**筛选前**考察的 Post 数；媒体组视为一个 Post。Post 浏览/转发指标取组内最大有效值；评论和 Reaction 以选定的主消息为准。缺失指标不是零，条件会按三值逻辑处理。
+
+更多字段、`Verified / Assumed / Truncated / Unknown` 完整性和扫描资源限制的解释见[完整使用指南](docs/USER_GUIDE.md)。
+
+## 从源码构建（Windows x64）
+
+需要 **Node.js 24、pnpm 10、Rust stable、Visual Studio 2022 C++ Build Tools、Windows SDK** 和固定版本的 TDLib 原生依赖。
 
 ```powershell
 git clone https://github.com/Dufunare/TMsgPicker.git
 cd TMsgPicker
-
-# 指向放有上述五个文件的目录；按你的实际位置修改
-$env:TMSGPICKER_TDLIB_DIR = 'D:\Native\TDLib\Release'
-
 pnpm.cmd install --frozen-lockfile
+
+# 首次构建原生依赖（可能需要较长时间）
+.\scripts\build-tdlib.ps1 -Jobs 2
+
+$env:TMSGPICKER_TDLIB_DIR = (Resolve-Path .\native\tdlib).Path
 pnpm.cmd tauri dev
 ```
 
-需要从指定的 TDLib 1.8.68 源码重新构建时，可直接运行 `./scripts/build-tdlib.ps1` 和 `./scripts/stage-native.ps1`，之后设置 `$env:TMSGPICKER_TDLIB_DIR = (Resolve-Path .\native\tdlib).Path` 再启动。脚本不会修改用户的 Telegram Session。旧开发环境如已在仓库根目录的 `Release/` 或 `Release/Release/` 放置 TDLib 构建产物，仍可省略环境变量，但无法据此证明旧 DLL 对应锁定的源码提交。`src-tauri/build.rs` 检查所需文件，并将 DLL 暂存到 Cargo 调试/发布 profile 目录以及对应的 `deps/`；找不到时会给出缺失路径。PowerShell 上使用 `pnpm.cmd` 可以绕开 `pnpm.ps1` 的脚本执行策略限制。
-
-也可尝试生成不带安装器的开发构建：
+重新生成同款应用图标：
 
 ```powershell
-pnpm.cmd tauri build --debug --no-bundle
-# 常规输出位置（未设置其他 CARGO_TARGET_DIR 时）：
-# src-tauri\target\debug\tmsgpicker.exe
+pnpm.cmd tauri icon docs/assets/tmsgpicker-icon.svg --output src-tauri/icons
 ```
 
-**注意**：`pnpm.cmd build` 只构建前端。直接执行 `pnpm.cmd tauri build` 仍属于常规开发打包，不自动采用发布专用资源配置；正式 NSIS/便携版必须走 [Release staging 和打包脚本](docs/RELEASE.md)，并核验 DLL、VC++ 运行库和 WebView2。
+图标的单一设计源是 [`docs/assets/tmsgpicker-icon.svg`](docs/assets/tmsgpicker-icon.svg)，使用 Tauri CLI 生成 Windows ICO、macOS ICNS 和各尺寸 PNG。发版时会自动生成、检验并同步图标资源。
 
-### 第一次打开
+详细的原生依赖来源、安装器打包和常见构建错误见 [Windows 构建文档](docs/BUILD_WINDOWS.md)。
 
-建议按这个顺序操作：
-
-1. 点击左上角 **应用设置**齿轮，填入自己申请的 Telegram API ID/Hash。
-2. 如果网络需要代理，配置 SOCKS5 并保存应用配置。
-3. 点击 **添加账号**，按登录向导进行 Telegram 授权。
-4. 等待账号状态变为已连接，加载聊天列表；选择一个聊天。
-5. 在右侧 **查询** 中填写范围与条件，点击 **执行查询**，在中间查看结果。
-
-没有正式账号时，左栏只显示添加引导，不会创建假的占位账号。
-
-## 申请与配置 Telegram API
-
-TMsgPicker **不会提供开发者自己的 API ID/Hash，也没有默认 API 凭据**。使用前需要自行准备。可通过 Telegram 官方的 [my.telegram.org](https://my.telegram.org)：
-
-1. 使用自己的 Telegram 手机号登录并完成网站要求的验证。
-2. 进入 **API development tools**；如果尚未创建 API 应用，按网站表单填写应用名称、短名称、平台等必要信息。
-3. 获取该应用的 **API ID**（数字）和 **API Hash**（字符串）。
-4. 打开 TMsgPicker → **应用设置** → **API 与代理**，分别填写 `Telegram API ID`、`Telegram API Hash`，再点击 **保存应用配置**。
-
-API ID/Hash 标识开发者注册的 API 应用，**并不替代 Telegram 登录验证码或两步验证密码**。不要在 issue、日志、截图、提交历史中公开 API Hash。不要直接使用其他第三方客户端内置的凭据。
-
-### 通过环境变量配置（可选）
-
-开发者也可以在启动 TMsgPicker 的终端中设置：
-
-```powershell
-$env:TMSGPICKER_API_ID = '你的数字 API ID'
-$env:TMSGPICKER_API_HASH = '你的 API Hash'
-pnpm.cmd tauri dev
-```
-
-优先级：**应用中已保存的全局配置／秘密优先；缺少 API 时使用环境变量**。应用设置中 Hash 输入框留空表示保留已有保存值，并不表示清除；如需清除，使用设置页的专用按钮。
-
-API Hash 由 Rust 侧管理，保存的秘密使用 Windows 当前用户范围的 DPAPI 加密；普通前端设置快照只告知是否已保存，不把原文秘密重新发送给 Vue。API ID 是应用配置的一部分，不作为秘密字段存放。
-
-## SOCKS5 代理
-
-在 **应用设置 → API 与代理**：
-
-1. 勾选 **启用 SOCKS5**。
-2. **服务器**填写 SOCKS5 主机名或 IP，例如 `127.0.0.1`。
-3. **端口**填写代理软件实际开放的 SOCKS5 或 Mixed 监听端口（例如 `7890`，**以你的代理软件配置为准**，不是固定端口）。
-4. 代理需要认证时填写用户名、密码；不需要认证则留空。
-5. 点击 **保存应用配置**；再观察账号的授权状态和连接状态。
-
-**注意**：
-
-- TDLib 不会自动沿用 Windows 的 HTTP 系统代理；HTTP 代理端口不一定可以作为 SOCKS5 使用。
-- API 和 SOCKS5 都是**全局设置**，对本机所有账号生效；保存配置可能安全关闭并重建正在运行的 Client。已经主动断开的账号保持断开。
-- **代理设置成功不等于 Telegram 网络已连通**。本机代理软件未启动、端口错误、网络受限等都可能造成连接失败或超时。
-- 代理密码输入框留空会保留已有值；点击 **清除代理认证信息** 才会清除保存的认证信息。
-
-## 登录与多账号
-
-### 首次登录
-
-1. 左侧点击 **添加账号**（或在设置窗口点击添加入口），打开独立的登录窗口。
-2. 输入**带国际区号的手机号**，如 `+86…`。
-3. 为本地 TDLib 数据库设置一个**本地数据库密码**。它与 Telegram 2FA 不是同一个密码；以后恢复已有数据库必须使用**同一个原密码**。
-4. 可选勾选 **记住此设备（Windows DPAPI 保护）**。勾选后应用保存受 DPAPI 保护的数据库密码副本；未勾选则下次可能需要手工输入原密码。
-5. 点击 **开始登录**，在网络连接和验证码发送后输入 Telegram 验证码。
-6. 如果 Telegram 账号启用了两步验证（2FA），可在同一表单中填写密码；后端先验证验证码，只有 TDLib 实际进入需要 2FA 的状态后才校验密码。密码错误可以只重试密码。
-7. Telegram 也可能要求邮箱验证码或已登录设备确认；以界面显示的 TDLib 授权状态为准。
-8. 授权达到 Ready 后，应用调用 `getMe` 获取身份并检查重复账号，成功才将它登记到正式账号列表。
-
-新登录期间只存在临时 `PendingLogin`，不会把尚未完成授权的记录显示为正式账号。取消新登录会安全关闭相应 Client 并清理本次新建的临时会话；**恢复旧记录时取消不会删除旧数据库**。
-
-### 账号选择、断开、恢复与注销
-
-- **切换账号**：点击左上账号切换入口。每个正式账号有独立 TDLib Client、Session、查询结果和网络状态；切换只改变当前查看对象，不自动断开其他账号。主账号用于默认选择，查看其他账号并不改变主账号。
-- **断开连接**：账号菜单中的 **断开连接** 只安全关闭该账号连接并保留本地 Session、账号登记和记住的密码；普通网络波动也不会自动被标记为“用户主动断开”。
-- **恢复连接**：账号菜单中的 **恢复连接**，或账号设置中补充原数据库密码后恢复。遇到 `NeedsDatabasePassphrase` 时必须输入**原密码**，不能创建新的密码去覆盖既有数据库。
-- **账号设置**：账号菜单 → **账号设置**，查看 Telegram 身份、状态、原密码恢复入口、需要时的重新授权，以及断开／恢复／注销。
-- **注销账号**：账号设置中的 **注销账号** 是**破坏性操作**：需要确认，由 TDLib 执行 `logOut`，收到明确回执和真实 Closed 后才清理该账号的本地 Session 与登记；失败时保留可恢复信息。它**不等同于断开连接**。
-- **旧 Session / 中断登录恢复**：添加账号向导可能列出待恢复的本地记录或 Legacy Session；选择对应项并输入原数据库密码。别为了“解决密码错误”手工删除数据库。
-
-关闭设置窗口不会退出账号；关闭整个应用会安全关闭各 Client 并保留可下次恢复的数据。**不要同时运行两个 TMsgPicker 实例并指向同一 TDLib 数据库目录。**
-
-## 界面与查询面板
-
-### 三栏主界面
-
-| 区域 | 用途 |
-|---|---|
-| 左：**Account & Chats** | 账号状态、添加/切换账号、应用设置、聊天搜索与列表 |
-| 中：**Messages & Results** | 当前聊天、扫描进度和状态、Post 结果卡片、媒体浏览 |
-| 右：**Query Builder** | 扫描范围、组合过滤器、排序、输出上限、运行/取消 |
-
-拖动两侧分隔条可调整宽度；分隔条也支持键盘方向键以及 Home 恢复默认比例。栏宽仅在当前窗口有效，**不会保存至下次启动**。窗口较窄（约 1060 CSS px 以下）时，查询栏改为可打开的抽屉。
-
-左栏支持 **全部 / 普通 / 归档** 聊天范围、聊天名称检索、刷新，以及按公开 `@username` 定位聊天。注意聊天列表依赖 TDLib 的已加载历史和范围限制，并非一次返回账号拥有的全部聊天。
-
-### 查询范围：计数单位是 Post
-
-**Post** 是应用统一的查询单位：单条 Telegram 消息通常是一个 Post，同一个 Album（媒体组）的多条底层消息合成一个 Post。
-
-| 查询范围 | 含义 |
-|---|---|
-| **最近 N 个帖子** | 从当前聊天历史中取最近 N 个 Post，再对它们筛选与排序 |
-| **日期范围 → 最新 N 个帖子** | 只考察指定时间区间内、时间最新的 N 个 Post，再筛选 |
-| **日期范围 → 扫描日期范围内全部帖子** | 在内部资源限制允许下，遍历指定时间窗口内的 Post |
-
-日期控件按本机日期/时间输入，Rust 查询使用 UTC Unix 秒；区间为 **[开始，结束)**（含开始、不含结束）。Album 的日期取其所有已读取成员中**最晚**的发送时间；被选中的整个 Album 保留其已获得的成员，不按单个成员日期拆开。
-
-**扫描范围 N 在筛选前计数**。例如“最近 100 个 Post + 浏览量 ≥ 500”，只检索这 100 个 Post 中满足条件者，不会不断向更早的历史补足 100 个匹配项。
-
-范围数量上限为 **100000 个 Post**；**最多展示帖子**设置 1～1000，只控制最后筛选和排序后保留的结果量，**不改变扫描范围**。页面上每页显示最多 **40 个结果**，上一页/下一页按钮位于结果列表底部；翻页会把中间消息面板滚回顶部，界面动画关闭或系统减少动态效果开启时直接跳转。
-
-### 条件编辑器
-
-右侧 **条件** 支持以下谓词，可在 AND、OR、NOT 中嵌套组合：
-
-| 谓词 | 说明 |
-|---|---|
-| **比较** | 浏览、转发、评论／回复信息、反应总数、指定 Emoji 反应计数；运算符 =、≠、>、≥、<、≤；输入数值 |
-| **存在 / 不存在** | 判断选定指标是否有有效值（例如回复信息是否存在） |
-| **类型** | 对整个 Post 检查是否**包含 / 不包含**文字、图片、视频、动图、文件、音频、语音、视频留言、贴纸或投票 |
-| **AND** | 全部条件成立 |
-| **OR** | 任意条件成立 |
-| **NOT** | 取条件逻辑上的否定；与缺失值规则共同生效 |
-
-**例：查询包含视频且不包含图片的 Post**：使用 AND，下面添加“类型 → 视频 → 存在”和“类型 → 图片 → 不存在”。类型谓词会检查 Album 的**所有已读取成员**，不是仅检查第一张媒体。
-
-**例：至少 500 次浏览、存在回复信息的 Post**：AND → “比较 → 浏览 → ≥ → 500”和“存在 → 回复信息”。
-
-**空值不等于零**：未提供的指标会显示 `—`。数值比较遇到未知值时结果为 Unknown，`NOT(Unknown)` 也仍为 Unknown；只有值为 True 的 Post 被选入结果。反应数据已存在但未出现特定 Emoji 时，该 Emoji 计数为 0；若整个反应数据缺失则为未知。
-
-内容类型不能当作数值比较字段。编辑器目前最大嵌套深度受 UI 和后端校验限制；建议避免不必要的深度嵌套。
-
-### 排序
-
-选择 **浏览、转发、评论、反应总数、指定 Emoji、日期** 中的一个字段，设置升序或降序；指定 Emoji 还要填写 Emoji 文本。缺失的排序值统一排最后，同值按 Post 日期及数字 ID 作确定性次序。Rust 协议支持多个排序字段，但当前图形界面编辑一个字段。
-
-### 查询状态
-
-结果标题下显示已考察 Post 数、匹配数、已读取底层消息数和页数。理解以下两组**独立状态**：
-
-| 扫描状态 | 含义 |
-|---|---|
-| `Running` | 正在扫描，当前排序与结果可能变化 |
-| `Complete` | 用户指定的扫描范围已满足或已走到历史/时间边界；**不代表所有媒体组成员都得到严格证明** |
-| `BudgetExceeded` | 达到资源额度，不能宣称扫描范围完整 |
-| `Interrupted` | 用户取消、游标无进展等中断 |
-| `Error` | TDLib 读取或解析等错误 |
-
-Post 自身有 `Verified`（已验证）、`Assumed`（连续历史推定完整）、`Truncated`（有明确缺失证据）、`Unknown`（边界无法确认）的成员完整性。TDLib 未提供 Album 总成员数，所以正常 Album 通常只能为 `Assumed`，不能一律宣称 `Verified`。日期窗口达到用户请求的最新 N 个 Post 后，界面会提示**尚未遍历整个日期范围**，这不影响该 N-Post 范围的 Complete 判定。
-
-## 结果、媒体与消息操作
-
-- 中间区域展示 Post 的文本、可点击安全链接、日期、浏览/转发/评论及 reactions；Post 卡片上的指标针对整个 Post。浏览/转发取 Album 成员中的**最大有效值**，不是求和；评论和 reactions 取确定的主消息（优先最早有 caption/文本者）。未知数值显示 `—`。
-- 点击 **展开媒体** 后，图片先显示已有的微型图/缩略图，再**自动请求原图**；不需要逐张点击。收起再展开可使用有界原图缓存，过期或被淘汰时再次自动获取。视频等其他媒体仍以封面/受限预览为主，并非完整视频播放器。
-- 将鼠标悬停在单条媒体预览上一小段时间后，右下角出现**这条底层消息**的浏览/转发小指标；它与 Post 汇总值不同。
-- **查看原文**：调用 TDLib 校验消息链接能力，允许时再取得原消息链接；没有可获取链接的私有消息可能无法打开。不根据 chat ID 自行猜测私密链接。
-- **关于转发**：Rust 侧已有 `preview_forward` / `forward_selected` 的预检、安全状态与完成/未知回执处理，但**当前主结果面板没有提供完整的批量选择及转发提交 UI**。因此不要将“可在界面直接批量转发”视为当前版本可操作的功能；后端接口也不应绕过用户授权或内容保护规则。
-
-切换聊天会立即清空该聊天视图中旧扫描结果、选中与预览确认；迟到的旧查询事件不会覆盖新聊天。切换账号则保留其他账号各自运行的 Client 和界面状态。
-
-## 设置选项
-
-统一设置窗口由 **应用设置 / 账号设置 / 外观设置** 三个子页面组成；登录窗口独立。入口位于左上齿轮或账号“更多操作”菜单。
-
-### 应用设置
-
-| 选项 | 用途与行为 |
-|---|---|
-| Telegram API ID / API Hash | 本机用户的 API 凭据；Hash 留空保留已保存值 |
-| 启用 SOCKS5 | 全局开关，按需填写服务器与 1～65535 端口 |
-| SOCKS5 用户名 / 代理密码 | 可选代理认证；密码留空保留已有值 |
-| 保存应用配置 | 校验并安全重建需要更新的账号 Client；不会注销 Telegram |
-| 清除保存的 API Hash | 删除 DPAPI 保存的该全局秘密 |
-| 清除代理认证信息 | 清除保存的代理用户名/密码 |
-| Debug：重置 TMsgPicker | **仅 Debug 构建显示**，高风险操作，详见下文 |
-
-### 账号设置
-
-显示所选账号的 Telegram 姓名、username、User ID、授权/网络状态和错误信息；可对明确选中的账号执行：**输入原数据库密码恢复 Session、按需重新授权、断开连接、恢复连接、注销账号、添加账号**。这里没有“重命名本地 Profile”“移除本地 Profile”“记住设备开关”“修改数据库密码”等功能；“记住此设备”在首次登录流程选择。
-
-主窗口切换账号不会偷偷改变已打开设置窗口的操作目标；请核对设置页显示的账号身份再做破坏性操作。
-
-### 外观设置
-
-| 选项 | 当前值域 |
-|---|---|
-| 主题 | 跟随系统、浅色、深色、液态玻璃 |
-| 强调色 | 6 位十六进制颜色（`#RRGGBB`） |
-| 界面密度 | 舒适、紧凑 |
-| 圆角 | 6～22 px |
-| 字号 | 85%～120% |
-| 阴影层次 | 扁平、柔和、凸起 |
-| 滚动条 | 纤细、标准 |
-| 图片预览大小 | 120～520 px |
-| 布局间距 | 75%～140% |
-| 玻璃不透明度 | 20%～90%，液态玻璃主题生效 |
-| 玻璃模糊 | 0～60 px，液态玻璃主题生效 |
-| 启用界面动画 | 开/关；同时尊重系统“减少动态效果”设置 |
-
-调整外观会跨窗口**立即预览**，包括受支持系统上的原生标题栏；只有点击 **应用主题** 才持久化。关闭设置而未应用时恢复已保存外观；**恢复默认** 先预览默认值，仍需应用才保存。布局宽度不属于持久化外观选项。
-
-### Debug 完整重置——请格外谨慎
-
-仅 Debug 版本有“重置 TMsgPicker”。它不是简单删除缓存：需要两次确认、输入 `RESET TMSGPICKER`，对全部已关联账号及相关授权 Session 尝试真实 `logOut` / Closed，再在严格路径检查后清除本地配置、凭据、Session 和文件。任何失败都应保留后续恢复所需数据并允许重试。**不要将其当作日常故障排除步骤，也不要在有重要 Session 时尝试。** Release 编译不注册这个危险命令。
-
-## 常见异常与处理
-
-| 表现 | 解释与建议 |
-|---|---|
-| “请通过 Tauri 启动” / 浏览器里没有消息 | 普通浏览器预览没有原生 TDLib；请运行 `pnpm.cmd tauri dev` |
-| 找不到 `tdjson.lib` 或 DLL / 启动失败 | 检查 `TMSGPICKER_TDLIB_DIR`、架构是否 x64、DLL 与导入库是否同版本，确保相应运行库可被加载 |
-| 缺少 API ID/Hash | 去 `my.telegram.org` 申请并在应用设置保存，或正确设置环境变量后重启 |
-| Telegram 连接超时、验证码迟迟不出现 | 确认 SOCKS5 类型/端口和网络；区分“正在等待 TDLib 参数”“网络未通”“Telegram 授权步骤”。不要连续新建 Session 来绕开超时 |
-| 验证码、2FA 或邮箱验证被拒绝 | 按登录窗口提示修正对应字段，2FA 与本地数据库密码不同 |
-| `NeedsDatabasePassphrase` | 到账号设置输入**创建这个 Session 时的原密码**；无法通过生成新密码恢复旧加密数据库 |
-| 已存在 Telegram 身份 / 重复账号 | 此账号已登记；切回已有账号或安全取消本次临时登录，系统不会自动合并 Session |
-| 聊天未列出 / 归档不全 | 尝试切换全部/普通/归档范围、刷新或解析公开 `@username`；列表加载是有限范围，不承诺完整枚举 |
-| 扫描 `Interrupted`、`BudgetExceeded`、`Error` | 查看状态与原因；缩小时间窗口/最近 N、确认网络或重试。不要把尚未完成的结果当作全量集合 |
-| Album 显示 `Assumed` 或 `Unknown` | 分别表示连续历史推定完整、成员边界不确定，并非一定存在丢失 |
-| 图片只有预览 / 原图不可用 | 下载仍在排队、超出允许大小、文件已不可用或网络/Session 发生变化；不要误以为原图已全部下载 |
-| “查看原文”失败 | 可能缺少 TDLib 消息链接权限、来源私密或消息不可访问 |
-| 有待确认的发送 `Pending` / `Unknown` | 后端保护性状态，不等于发送失败；`Unknown` 可能已经送达，务必在 Telegram 核实再考虑重试 |
-| 账号关闭/注销失败 | 可能有待回执发送、网络超时或真实 Closed 未到达；保留 Session，按界面提示重试，勿手工删除文件 |
-| 主题预览未保留 | 只有 **应用主题** 才保存，未保存的预览在设置窗口关闭时回滚 |
-
-## 本地数据、安全及当前限制
-
-### 数据存放与安全
-
-默认应用数据目录为 `%LOCALAPPDATA%\com.funare.tmsgpicker\`，常见结构：
+## 技术架构
 
 ```text
-app-config.json                 # 非敏感全局应用配置与外观
-accounts.json                   # 正式账号、主账号、待恢复记录
-credential-store.json           # Windows 当前用户 DPAPI 密文
-tdlib/
-  accounts/<Profile ID>/
-    db/                         # 对应账号独立的 TDLib 数据库
-    files/                      # 对应账号独立的 TDLib 文件缓存
-  db/ 与 files/                 # 仅兼容旧 Legacy Session 时使用
+                  Vue 3 / TypeScript
+           主窗口 · 登录 · 设置 · Query Builder
+                         │ Tauri IPC
+                 Rust 应用层 / 领域层
+          AccountRegistry · Post Scan · Cache
+                         │ TDLib JSON C API
+         本地 TDLib Client / 加密 Session / Telegram
 ```
 
-升级旧版本时可能保留迁移备份文件。配置、账号注册表和秘密存储采用协调写入和失败恢复；手机号、登录验证码、Telegram 2FA 不作为应用设置持久化。缓存/数据库由 TDLib 管理，不要在 Client 正在运行时手工删除。
+- **TDLib**：`1.8.68`，固定至 2026-10-12 的 [`f381f4b`](https://github.com/tdlib/td/commit/f381f4b35ebfd52a086ec3af5352ed77bbdbde01)。
+- **UI**：Tauri 2、Vue 3、TypeScript、Vite。
+- **Rust**：edition 2024；Post 聚合、查询状态、扫描预算和账号隔离。
+- **固定依赖与构建**：见 [`scripts/native-versions.json`](scripts/native-versions.json) 和 [发布说明](docs/RELEASE.md)。
 
-**请保护数据库原密码及本机 Session**。DPAPI 只保护当前 Windows 用户范围内的秘密副本，不代表整个本机从此不可能泄露。不要上传 `%LOCALAPPDATA%` 中的文件、日志和截图中的个人内容；仓库也不应该包含实际 API Hash、DLL、`.db` 或 Session。
+## 安全与边界
 
-### 当前版本的明确限制
+- 没有默认 Telegram API Hash；不要在 Issue、截图或日志中泄露 API Hash、登录二维码、验证码、2FA 密码或 Session 文件。
+- 数据保存在用户本机；**断开连接**保留 Session，**注销账号**才调用 Telegram `logOut`。卸载/升级不应擅自删除用户数据。
+- 便携版/安装器不得携带开发者的真实账号数据。当前版本没有自动更新或代码签名。
+- 本项目独立开发，**不隶属于 Telegram，也不受 Telegram 官方认可或背书**。
 
-1. 主要支持 Windows x64；Linux/macOS 不在已验证桌面运行范围内。
-2. 没有打包进程序的公共 Telegram API 身份；每位用户需要申请自己的凭据。
-3. GitHub Release CI 已提供从固定源码构建 TDLib/原生 DLL 和 NSIS/便携 ZIP 的路径；源码本地开发也可使用固定构建脚本。**自动构建成功仍不等于干净机验收或已公开发布**。
-4. 聊天列表受 TDLib 可用数据、加载页数和查询范围限制；不提供全 Telegram 账号的实时全文全量索引。
-5. 扫描设有内部资源保护（典型上限：100000 条原始消息、2500 页、300 秒，另有小幅 Album 边界额度）；达到上限可返回部分范围而非静默伪造 Complete。
-6. 查询以**本次扫描时的消息/互动指标快照**为基础，不会持续刷新排行榜；UI 排序编辑器只有一个字段。
-7. 结果最多保留 1000 个 Post，界面每页 40 个；大型结果的最终 IPC 仍可能包含较多 Post 数据。
-8. 媒体访问仍受单账号原生生命周期锁、下载队列、文件大小及内存缓存预算约束；这不是完整的视频、音频或附件管理器。
-9. 当前界面没有批量转发提交入口；部分转发逻辑属于已有但未开放给普通用户的后端能力。
-10. 已有自动化 Mock 回归，但不能据此保证真实 Windows 设备上的全部 FPS、峰值内存、网络及 Telegram 授权场景已被验证。
-11. 本项目采用 [MIT License](LICENSE)；发布包将附带应用 MIT 声明与 TDLib、OpenSSL、zlib 的第三方声明。微软 VC++ 运行库的再分发要求、实际 DLL 依赖和干净机验收仍须单独确认。
+## 文档
 
-## 固定 TDLib 依赖与 Windows 发布
+[使用指南](docs/USER_GUIDE.md) · [架构与设计](docs/ARCHITECTURE.md) · [功能与模块](docs/projects.md) · [Windows 源码构建](docs/BUILD_WINDOWS.md) · [Release 与验收](docs/RELEASE.md) · [更新日志](CHANGELOG.md) · [开发记录](docs/Devlog.md)
 
-**当前目标 TDLib 版本：1.8.68（2026 年 10 月 12 日更新）。** 固定源码提交为 [`f381f4b35ebfd52a086ec3af5352ed77bbdbde01`](https://github.com/tdlib/td/commit/f381f4b35ebfd52a086ec3af5352ed77bbdbde01)。这说明项目**新构建的依赖基线**，不代表以前手工构建的 DLL 已验证具有同一来源。
+---
 
-上游依赖基线记录在 [`scripts/native-versions.json`](scripts/native-versions.json)：
+<div align="center">
 
-| 依赖 | 基线 |
-|---|---|
-| TDLib | **1.8.68 / 2026-10-12 / 完整 SHA 固定** |
-| OpenSSL | `3.6.5#1`（vcpkg） |
-| zlib | `1.3.2#2`（vcpkg） |
-| gperf（仅编译时） | `3.3#1`（vcpkg） |
-| vcpkg | `e456309491fd875487bf02b8a0dca76c1b1b00cc` |
+**TMsgPicker** · Made for thoughtful Telegram exploration
 
-完整 Windows 构建：
+[MIT License](LICENSE) © 2026 Dufunare · TMsgPicker 图标与应用代码遵循仓库许可，第三方依赖遵循其原有许可证。
 
-```powershell
-.\scripts\build-tdlib.ps1 -Jobs 2
-.\scripts\stage-native.ps1
-$env:TMSGPICKER_TDLIB_DIR = (Resolve-Path .\native\tdlib).Path
-pnpm.cmd install --frozen-lockfile
-pnpm.cmd tauri build --bundles nsis --config src-tauri/tauri.release.generated.json
-.\scripts\package-release.ps1
-```
-
-生成的安装包、免安装 ZIP 和 SHA-256 位于 `native/dist/`。安装包在普通 Windows 上不要求用户编译 TDLib；便携版无需安装主程序，但用户 Session 仍使用 `%LOCALAPPDATA%`，且系统必须有 WebView2。GitHub 的 `vX.Y.Z` tag Release 工作流会生成 **Draft Release**，维护者完成干净机手动测试后才发布。工作流**不内置 Telegram API 凭据**；用户始终需要在应用设置中自行配置。
-
-进一步阅读：[Windows/TDLib 构建细节](docs/BUILD_WINDOWS.md) · [CI、打包、许可证和人工发布检查](docs/RELEASE.md)。
-
-## 测试与参与开发
-
-无需真实 Telegram 凭据/DLL 的常用静态与离线检查：
-
-```powershell
-pnpm.cmd test
-pnpm.cmd build
-cargo test --manifest-path src-tauri/Cargo.toml --no-default-features --lib --tests
-cargo clippy --manifest-path src-tauri/Cargo.toml --no-default-features --all-targets -- -D warnings
-```
-
-带桌面特性的 Windows 原生检查需要 TDLib 构建产物：
-
-```powershell
-cargo test --manifest-path src-tauri/Cargo.toml --lib --tests
-cargo check --manifest-path src-tauri/Cargo.toml --all-targets
-```
-
-自动化测试主要使用 Mock TDLib、合成消息、合成账号及临时目录，不访问真实账号、不调用真实转发或注销。普通 PR CI 执行前端检查和 Windows Rust 离线回归；独立的 Windows Release 工作流额外构建固定源码的 TDLib/原生 DLL、NSIS 与 ZIP，执行 ABI smoke、PE 依赖/安装器内容检查并生成校验和。**仍不代表真实登录、消息投递和干净机 GUI 的端到端验收已经完成**。
-
-要理解数据模型、查询语义、生命周期或扩展源码，请参阅 [ARCHITECTURE.md](docs/ARCHITECTURE.md) 和 [projects.md](docs/projects.md)；历史决策与迭代记录在 [Devlog.md](docs/Devlog.md)。
+</div>

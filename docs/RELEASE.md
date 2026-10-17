@@ -2,12 +2,12 @@
 
 > 本文是**发布操作手册**，与 [README](../README.md)（用户使用）、[ARCHITECTURE.md](ARCHITECTURE.md)（设计决策）、[projects.md](projects.md)（源码导览）和 [Devlog.md](Devlog.md)（时间线）互补。源码依赖构建见 [BUILD_WINDOWS.md](BUILD_WINDOWS.md)。
 
-## 1. v0.1.x 发布约定
+## 1. v0.2.0 发布约定
 
-- 发布平台：**Windows x64**，第一阶段仅提供 **NSIS 安装器和 Portable ZIP**。暂不做 MSI、macOS/Linux、自动更新。
+- 发布平台：**Windows x64**，提供 **NSIS 安装器、Portable ZIP、完整构建产物合集以及依赖清单**。暂不做 MSI、macOS/Linux、自动更新。
 - Telegram API：**只允许用户自行配置 ID/Hash**，发布流水线不注入开发者或其他人的 API 凭据，源码/二进制不带内置默认 API。
 - 应用源码、脚本和版本锁定文件可公开；`native/` 里检出的 TDLib/vcpkg 源码与本地编译二进制**不提交 Git**。
-- GitHub `vX.Y.Z` 标签必须与 `src-tauri/tauri.conf.json` 中的版本相同。`package.json` 当前没有版本字段；发行版本以 Tauri 配置为准。
+- GitHub `vX.Y.Z` 标签必须与 `src-tauri/tauri.conf.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 和 `package.json` 中的版本一致。发布意图记录在 `scripts/release-intent.json`。
 - 发布是**两段式**：CI 成功后自动创建或更新 **Draft + Prerelease**，由维护者完成干净机核验后手动公开。没有人工作为最后一道确认时，不把 CI “构建成功”解释为“可用安装器已经交付给用户”。
 
 ## 2. 发版前置条件与供应链
@@ -26,64 +26,31 @@
 
 vcpkg 依赖端口定义受固定提交约束，但 Windows runner、MSVC、CMake、Rust/Node/GitHub Actions 版本仍会逐步变化；本方案不承诺 bit-for-bit 重现，产物检查依赖 SHA-256 与实际干净机验证。后续可考虑 pin runner image/工具链或保存 SLSA provenance/签名 attestations。
 
-## 3. 本地和 GitHub CI 发布流水线
+## 3. CI 发布流水线与打标签
 
-```text
-main（已通过 review/离线 CI）
-        │
-        ├─ Actions → Windows x64 Release → Run workflow
-        │    手工验证（仅上传 Actions Artifacts）
-        │
-        └─ git tag -a v0.1.0 ...
-             git push origin v0.1.0
-                         │
-             Windows 2022 runner（不使用 Telegram 用户密钥）
-                         │
-             pnpm test / build
-             Rust --no-default-features tests / clippy
-             git checkout TDLib 和 vcpkg 固定 SHA
-             vcpkg install pinned OpenSSL/zlib/gperf
-             CMake --target tdjson --config Release
-             stage-native（哈希及许可证核验）
-             Tauri build --bundles nsis
-             tdlib_smoke（TDLib 1.8.68 ABI，零 Session）
-             NSIS 7-Zip 内容检查
-             Portable ZIP + MSVC CRT + PE imports 审计
-             SHA256SUMS.txt
-                         │
-             Actions Artifacts（14 天）
-                         │
-             GitHub Releases：Draft / Prerelease
-                         │
-             干净 Windows VM / 真实 GUI 手工验收
-                         │
-             维护者手动 Publish Release
-```
+v0.2.0 使用**显式的发布意图文件** [`scripts/release-intent.json`](../scripts/release-intent.json)。在 `main` 更新版本号和该文件并提交后，`Windows x64 Release` 工作流将：
 
-触发文件：`.github/workflows/release.yml`；构建脚本：
+1. 核验三个应用版本与意图文件、固定原生依赖、PowerShell 脚本；
+2. 使用 [`docs/assets/tmsgpicker-icon.svg`](assets/tmsgpicker-icon.svg) 生成所有 Tauri 平台图标；
+3. 如果图标生成发生改变，先把生成文件提交回 `main`；无法推送则拒绝发版；
+4. 完成前端、Rust 离线单测、固定 TDLib 构建、NSIS、ABI Smoke Test、依赖审计和 SHA256；
+5. 通过后以**实际用于构建的源码 SHA**创建 `v0.2.0` tag 和 **Draft / Prerelease**；
+6. 将安装器、便携 ZIP、完整 Build Artifacts ZIP、来源清单和校验文件都上传到 GitHub Releases 的 **Assets**。
 
-- `scripts/build-tdlib.ps1`：固定源码、vcpkg port、CMake native 构建与 manifest；
-- `scripts/stage-native.ps1`：SHA/版本验证、运行 DLL、第三方声明、生成 Tauri Release-only overlay；
-- `scripts/audit-pe-imports.ps1`：依赖审计（不信任 CI PATH）；
-- `scripts/package-release.ps1`：检查 NSIS 内容、便携版 MSVC CRT、校验和及 ZIP。
+> 未通过构建时不会创建新标签。已有标签不能重新指向其他提交；同版本重复发布应报错并另起补丁版本。Draft 不等于公开发布。
 
-PR 还会运行 `tests/releaseStaging.ps1` 的**纯合成文件契约测试**：模拟 TDLib/依赖 DLL 与版权声明，验证 Release overlay、资源映射与文件哈希篡改拒绝；该测试不编译/调用真实 TDLib，因此不能代替正式构建或干净机验收。
+触发方式：只在 `main` 的 `scripts/release-intent.json` 内容变化时自动执行；旧的 `v*` tag 推送和 `workflow_dispatch` 仍可执行构建，但无需再次提交图标。为避免标签越过未经验证的源码，正式流程应以 main 的发布意图提交触发。
 
-普通 PR 仍由 `.github/workflows/frontend-ui.yml` 的前端及离线 Rust 测试负责，不允许通过 PR 代码获得发布凭据。新发布流水线**不使用任何 Telegram API secrets**。未来若增加代码签名，应只在可信标签/受保护发布环境使用签名服务，且不得授权不可信 PR 使用证书。
+| 文件 | 说明 |
+|---|---|
+| [`.github/workflows/release.yml`](../.github/workflows/release.yml) | Windows x64 CI / 生成图标 / 打标签 / Draft Release |
+| [`scripts/native-versions.json`](../scripts/native-versions.json) | TDLib/vcpkg/OpenSSL/zlib/gperf 精确基线 |
+| [`scripts/build-tdlib.ps1`](../scripts/build-tdlib.ps1) | 原生依赖固定构建 |
+| [`scripts/stage-native.ps1`](../scripts/stage-native.ps1) | DLL、许可证、来源哈希和 Tauri overlay |
+| [`scripts/package-release.ps1`](../scripts/package-release.ps1) | NSIS 和 Portable 校验、打包 |
+| [`CHANGELOG.md`](../CHANGELOG.md) | 每版主要变化 |
 
-### 一次发布的操作示例
-
-```powershell
-# 先检查 main、README、依赖锁定、版本号和测试
-git switch main
-git pull --ff-only
-git tag -a v0.1.0 -m "TMsgPicker v0.1.0 preview"
-git push origin v0.1.0
-```
-
-**不要重复使用已有的发布标签**，也不要为了“修复包”直接修改同一标签指向：审计和校验和需要不可变的 Release source ref。修复请创建新的 patch 版本/标签。根目录已有本项目的 MIT `LICENSE`；但未完成第三方与微软运行库分发许可审查、安装测试前，仍应保留 Draft，不能仅凭 CI 通过就公开 Release。
-
-从 GitHub Actions 手工运行工作流（workflow_dispatch）用于验证新分支的 NSIS/ZIP；它**只上传 Actions Artifact，不会创建 Release**。只有 push 版本标签触发的运行才附加到 Draft Release。
+PR 仍以 `frontend-ui.yml` 和 Release 合成文件测试检查；无真实 Telegram Session、API Hash 或 2FA 密钥参与 CI。人工验收仍按第 6 节。
 
 ## 4. 发行物组成
 
@@ -91,7 +58,9 @@ git push origin v0.1.0
 |---|---|---|
 | `TMsgPicker-Setup-x64.exe` | 普通 Windows 用户 | Tauri NSIS 安装、`tmsgpicker.exe`、TDLib/OpenSSL/zlib DLL、**MIT 与第三方许可声明**、MSVC CRT、WebView2 按需安装引导 |
 | `TMsgPicker-Portable-x64.zip` | 希望免安装的用户、测试人员 | `TMsgPicker/` 目录内 EXE + 原生 DLL + MSVC x64 CRT + `licenses/` |
-| `SHA256SUMS.txt` | 校验文件完整性 | 安装器/ZIP 的 SHA-256（从构建输出计算） |
+| `TMsgPicker-Windows-x64-Artifacts.zip` | 完整 CI 构建包 | 安装器、Portable ZIP、依赖清单（方便整套下载） |
+| `native-dependencies.json` | 原生来源证明 | 固定的 TDLib/vcpkg 及编译输入 |
+| `SHA256SUMS.txt` | 校验文件完整性 | 四个 Assets 的 SHA-256（从构建输出计算） |
 
 便携版的典型目录：
 
@@ -144,7 +113,7 @@ Release 默认**没有代码签名**，可能出现 SmartScreen 声誉警告。�
 ### B. 用户设置、账号和数据安全
 
 - [ ] 没有预置 API，首次运行清楚引导用户到 `my.telegram.org` 申请 ID/Hash；
-- [ ] 用户自行配置 API 与 SOCKS5 后，在自愿/受控账号上进行真实登录、验证码/2FA、会话复用和主动断开/恢复；
+- [ ] 用户自行配置 API 与 SOCKS5 后，在自愿/受控账号上进行 QR 扫码和手机号验证码/2FA 登录、会话复用和主动断开/恢复；
 - [ ] 两个账号并存、切换前台账号不破坏其他后台 Client 与数据；
 - [ ] 测试运行中的应用退出、重新启动后的既有 Session 可恢复；
 - [ ] 以旧版本已经存在的账号数据库升级安装，确认配置、DPAPI 凭据、Session 不被误删；

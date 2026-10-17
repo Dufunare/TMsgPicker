@@ -4,7 +4,7 @@
 
 ## 1. 固定版本与可核对的来源
 
-TMsgPicker v0.1 的**新源码构建基线**在 [`scripts/native-versions.json`](../scripts/native-versions.json) 中集中声明：
+TMsgPicker v0.2.0 的**新源码构建基线**在 [`scripts/native-versions.json`](../scripts/native-versions.json) 中集中声明：
 
 | 依赖 | 固定版本/提交 | 用途 |
 |---|---|---|
@@ -145,3 +145,11 @@ WebView2 采用 Tauri 默认的按需下载 Bootstrapper（安装器缺少时需
 - **访问 GitHub 失败**：脚本会报错退出；请在可靠网络环境重试，不自动从第三方非校验镜像替换依赖。
 
 **安全**：构建/测试不需要 Telegram API Hash、真实手机号或 Session。`native/`、`.env`、DB 与 DLL 应保持忽略。请不要向 issue 附上真实凭据或 `%LOCALAPPDATA%` 中的 TDLib 数据。
+
+
+## 6. v0.2.0 图标与打包来源
+
+- 设计源：[`docs/assets/tmsgpicker-icon.svg`](assets/tmsgpicker-icon.svg)。生成的 Windows ICO、Windows Store PNG、macOS ICNS 和 PNG 位于 `src-tauri/icons/`。
+- 重新生成：`pnpm.cmd tauri icon docs/assets/tmsgpicker-icon.svg --output src-tauri/icons`。
+- Release workflow 从同一源自动再生成并将改动提交回 main，之后才执行 Tauri NSIS 构建。
+- 本版在单独的安装器 / Portable ZIP 外，还增加 `TMsgPicker-Windows-x64-Artifacts.zip` 和 `native-dependencies.json` 作为 GitHub Release Assets。校验 `SHA256SUMS.txt` 会覆盖这些资产。详情见 [RELEASE.md](RELEASE.md)。
