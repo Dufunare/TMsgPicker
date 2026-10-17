@@ -85,6 +85,31 @@ impl LogoutProgress {
     }
 }
 impl AuthService {
+    /// Start Telegram's native QR login. Never generate or submit QR tokens ourselves.
+    pub fn request_qr(g: &dyn TelegramGateway) -> Result<()> {
+        let cancel = AtomicBool::new(false);
+        let state = g.request(json!({"@type":"getAuthorizationState"}), &cancel)?;
+        if !matches!(state["@type"].as_str(),
+            Some("authorizationStateWaitPhoneNumber")
+            | Some("authorizationStateWaitCode")
+            | Some("authorizationStateWaitEmailAddress")
+            | Some("authorizationStateWaitEmailCode")
+            | Some("authorizationStateWaitPassword")
+            | Some("authorizationStateWaitRegistration")
+            | Some("authorizationStateWaitPremiumPurchase")
+        ) {
+            return Err("当前授权状态不能切换到二维码登录".into());
+        }
+        let reply = g.request(json!({
+            "@type":"requestQrCodeAuthentication",
+            "other_user_ids":[]
+        }), &cancel)?;
+        if reply["@type"] != "ok" {
+            return Err("Telegram 未确认二维码登录请求".into());
+        }
+        Ok(())
+    }
+
     /// One UI submission, with TDLib's code -> optional password states enforced.
     pub fn submit_login(
         g: &dyn TelegramGateway,

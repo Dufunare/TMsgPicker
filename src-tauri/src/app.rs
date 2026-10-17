@@ -72,6 +72,7 @@ struct PendingLogin {
     profile_id: String,
     phone: Option<String>,
     phone_submitting: bool,
+    qr_requested: bool,
     remember_database: bool,
     newly_created: bool,
 }
@@ -94,6 +95,8 @@ struct AccountRuntime {
     #[cfg(debug_assertions)]
     reset_pending_closed: AtomicBool,
     connection: Mutex<Connection>,
+    // Bearer token for pending QR login; NEVER include in public Connection events.
+    qr_login_link: Mutex<Option<String>>,
     active: Mutex<Option<(String, Arc<AtomicBool>)>>,
     results: Mutex<Option<ScanResult>>,
     forwarding: AtomicBool,
@@ -481,6 +484,28 @@ fn update(app: &tauri::AppHandle, profile_id: &str, epoch: u64, v: Value) {
         {
             login.phone_submitting = false;
         }
+        if v["@type"] == "updateAuthorizationState" {
+            let qr_link = if connection.auth_state == "authorizationStateWaitOtherDeviceConfirmation" {
+                v["authorization_state"]["link"].as_str()
+                    .filter(|link| valid_login_qr_link(link))
+                    .map(str::to_owned)
+            } else {
+                None
+            };
+            *s.qr_login_link.lock().unwrap() = qr_link.clone();
+            // Only the login window may receive the ephemeral QR bearer token.
+            let is_login_owner = global.pending_login.lock().unwrap().as_ref()
+                .is_some_and(|pending| pending.profile_id == profile_id);
+            if is_login_owner {
+                if let Some(window) = app.get_webview_window("login") {
+                    let _ = window.emit("login-qr-updated", LoginQrUpdate {
+                        profile_id: profile_id.to_string(),
+                        generation: epoch,
+                        link: qr_link,
+                    });
+                }
+            }
+        }
         let _ = app.emit("connection", connection);
         if ready {
             let handle = app.clone();
@@ -499,16 +524,22 @@ fn update(app: &tauri::AppHandle, profile_id: &str, epoch: u64, v: Value) {
                 if !current_epoch(&runtime, epoch) || global.exiting.load(Ordering::SeqCst) {
                     return;
                 }
-                let phone = global
-                    .pending_login
-                    .lock()
-                    .unwrap()
-                    .as_mut()
-                    .filter(|p| p.profile_id == runtime.profile_id)
-                    .and_then(|p| p.phone.take());
-                if let Some(phone) = phone {
+                let (phone, start_qr) = {
+                    let mut pending = global.pending_login.lock().unwrap();
+                    if let Some(login) = pending.as_mut().filter(|p| p.profile_id == runtime.profile_id) {
+                        let start_qr = std::mem::take(&mut login.qr_requested);
+                        (if start_qr { None } else { login.phone.take() }, start_qr)
+                    } else {
+                        (None, false)
+                    }
+                };
+                if start_qr || phone.is_some() {
                     let outcome = client(&runtime).and_then(|g| {
-                        AuthService::submit(g.as_ref(), "authorizationStateWaitPhoneNumber", phone)
+                        if start_qr {
+                            AuthService::request_qr(g.as_ref())
+                        } else {
+                            AuthService::submit(g.as_ref(), "authorizationStateWaitPhoneNumber", phone.unwrap())
+                        }
                     });
                     if let Err(error) = outcome {
                         if let Some(login) = global
@@ -892,6 +923,7 @@ fn finish_close(s: &AccountRuntime, outcome: Result<()>) -> Result<Connection> {
         progress.closed = true;
     }
     *s.gateway.lock().unwrap() = None;
+    *s.qr_login_link.lock().unwrap() = None;
     s.epoch.fetch_add(1, Ordering::SeqCst);
     let c = Connection {
         profile_id: Some(s.profile_id.clone()),
@@ -2424,6 +2456,7 @@ pub fn run() {
             open_login,
             begin_login,
             login_status,
+            request_qr_login,
             login_auth_submit,
             retry_login_identity,
             cancel_login,

@@ -137,3 +137,40 @@ test('new code events win over stale phone snapshots even before the pending own
   incoming='authorizationStateWaitPhoneNumber';login.updateConnection(null);await login.sync();assert.equal(login.sendingPhone.value,true);assert.equal(login.label.value,undefined);
   login.error.value='synthetic phone rejection';await login.sync();assert.equal(login.sendingPhone.value,false);assert.equal(login.label.value,'手机号（含国际区号）');
 });
+
+test('QR login starts without sending phone, and accepts only current generation QR updates',async()=>{
+  const calls:Array<{command:string;args:unknown}>=[];
+  const current={...connection,auth_state:'authorizationStateWaitOtherDeviceConfirmation'};
+  const transport=async(command:string,args?:unknown)=>{
+    calls.push({command,args});
+    if(command==='begin_login')return 'pending';
+    if(command==='login_status')return {...current,qr_login_link:'tg://login?token=mock'};
+    if(command==='app_settings')return fixture;
+  };
+  const login=await makeLogin(transport as Parameters<typeof useLogin>[0]);
+  login.loginMethod.value='qr';login.passphrase.value='synthetic password';
+  await login.begin();
+  assert.deepEqual(calls.find(c=>c.command==='begin_login')?.args,{config:{
+    phone:'',qr_login:true,passphrase:'synthetic password',remember_database:false,recovery_profile_id:null
+  }});
+  assert.equal(login.qrLink.value,'tg://login?token=mock');
+  login.receiveQr({profile_id:'pending',generation:0,link:'tg://login?token=wrong-generation'});
+  assert.equal(login.qrLink.value,'tg://login?token=mock');
+  login.receiveQr({profile_id:'pending',generation:1,link:'tg://login?token=new'});
+  assert.equal(login.qrLink.value,'tg://login?token=new');
+  const html=await wizard(login);
+  assert.match(html,/使用 Telegram 扫码登录/);
+  assert.match(html,/登录二维码/);
+  assert.match(html,/<svg/);
+  assert.doesNotMatch(html,/tg:\/\/login\?token=/);
+  login.updateConnection({...current,auth_state:'authorizationStateWaitPassword'});
+  assert.equal(login.qrLink.value,null);
+});
+test('switching existing code step to QR sends only pending profile and generation',async()=>{
+  const calls:Array<{command:string;args:unknown}>=[];
+  const transport=async(command:string,args?:unknown)=>{calls.push({command,args});if(command==='login_status')return {...connection,auth_state:'authorizationStateWaitCode'};if(command==='app_settings')return fixture;};
+  const login=await makeLogin(transport as Parameters<typeof useLogin>[0]);
+  login.updateConnection({...connection,auth_state:'authorizationStateWaitCode'});
+  await login.requestQr();
+  assert.deepEqual(calls.find(c=>c.command==='request_qr_login')?.args,{profileId:'pending',generation:1});
+});

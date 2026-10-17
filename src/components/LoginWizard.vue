@@ -1,7 +1,21 @@
 <script setup lang="ts">
 import {useLogin} from '../useLogin';
 import AppSelect from './AppSelect.vue';
-const {snapshot,connection,phone,passphrase,remember,recoveryId,value,twoFactorPassword,busy,error,label,pending,sendingPhone,combinedAuth,begin,submit,cancel,openSettings,retryIdentity}=useLogin();
+import {computed} from 'vue';
+import {qrcodegen} from '../qr/qrcodegen';
+const {snapshot,connection,loginMethod,qrLink,requestQr,phone,passphrase,remember,recoveryId,value,twoFactorPassword,busy,error,label,pending,sendingPhone,combinedAuth,begin,submit,cancel,openSettings,retryIdentity}=useLogin();
+const qrSvg=computed(()=>{
+  const link=qrLink.value;
+  if(!link||connection.value?.auth_state!=='authorizationStateWaitOtherDeviceConfirmation')return '';
+  try{
+    const qr=qrcodegen.QrCode.encodeText(link,qrcodegen.QrCode.Ecc.MEDIUM);
+    const pad=4,size=qr.size+pad*2;
+    let cells='';
+    for(let y=0;y<qr.size;y++)for(let x=0;x<qr.size;x++)
+      if(qr.getModule(x,y))cells+=`<rect x="${x+pad}" y="${y+pad}" width="1" height="1"/>`;
+    return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${size} ${size}" shape-rendering="crispEdges"><rect width="${size}" height="${size}" fill="#fff"/><g fill="#000">${cells}</g></svg>`;
+  }catch{return '';}
+});
 
 // Diagnostic-only, read-only description of Telegram's declared delivery route.
 // All raw TDLib fields are allowlisted and stripped of PII by the Rust backend.
@@ -31,13 +45,22 @@ function codeChannelLabel(kind:string|null|undefined):string {
 <p v-if="error" class="error" role="alert">{{error}}</p>
 <form v-if="!pending" @submit.prevent="begin">
   <label v-if="snapshot?.interrupted_profiles.length">本地会话<AppSelect v-model="recoveryId" label="本地会话" :options="[{value:'',label:'创建新的独立 Session'},...snapshot.interrupted_profiles.map(p=>({value:p.profile_id,label:'恢复未完成登录 · '+(p.is_legacy_profile?'Legacy':p.profile_id)}))]"/></label>
-  <label>手机号（含国际区号）<input v-model="phone" type="tel" placeholder="+86…" autocomplete="off" :required="!recoveryId"></label>
+  <div class="login-method-choice" role="group" aria-label="Telegram 登录方式"><button type="button" :aria-pressed="loginMethod==='phone'" @click="loginMethod='phone'">手机号</button><button type="button" :aria-pressed="loginMethod==='qr'" @click="loginMethod='qr'">QR 扫码</button></div>
+  <label v-if="loginMethod==='phone'">手机号（含国际区号）<input v-model="phone" type="tel" placeholder="+86…" autocomplete="off" :required="!recoveryId"></label>
   <label>{{recoveryId?'原有本地数据库密码':'设置本地数据库密码'}}<input v-model="passphrase" type="password" autocomplete="off" required></label>
   <label class="check"><input v-model="remember" type="checkbox">记住此设备（Windows DPAPI 保护）</label><small>未记住时，下次启动需输入原数据库密码以恢复 Session。</small>
   <div class="buttons"><button class="primary" :disabled="busy">{{busy?'正在创建会话…':'开始登录'}}</button><button type="button" :disabled="busy" @click="cancel">取消</button></div>
 </form>
 <template v-else>
   <p class="muted">{{sendingPhone?'正在提交手机号并请求验证码…':connection?.detail}}</p><p v-if="connection?.connection_state!=='connectionStateReady'" class="muted">等待网络连接；请检查全局 SOCKS5 配置。</p>
+  <section v-if="connection?.auth_state==='authorizationStateWaitOtherDeviceConfirmation'" class="settings-card qr-login" aria-label="Telegram QR 登录">
+    <h3>使用 Telegram 扫码登录</h3>
+    <div v-if="qrSvg" class="qr-login-code" role="img" aria-label="Telegram 登录二维码" v-html="qrSvg"></div>
+    <p v-else class="muted">正在等待 TDLib 提供二维码，或二维码已过期。可尝试重新请求。</p>
+    <small>在已登录的 Telegram 手机客户端进入 设置 → 设备 → 连接桌面设备，扫描二维码并确认授权。二维码自动更新，请勿分享。</small>
+    <div class="buttons"><button :disabled="busy" @click="requestQr">重新获取二维码</button></div>
+  </section>
+  <div v-if="connection?.auth_state==='authorizationStateWaitCode'||connection?.auth_state==='authorizationStateWaitPhoneNumber'" class="buttons"><button :disabled="busy" @click="requestQr">改用 QR 扫码登录</button></div>
   <section v-if="connection?.auth_state==='authorizationStateWaitCode'" class="settings-card" aria-label="验证码投递诊断">
     <h3>TDLib 验证码投递诊断</h3>
     <p>授权状态：<code>{{connection.auth_state}}</code></p>
