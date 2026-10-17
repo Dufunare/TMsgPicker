@@ -73,6 +73,9 @@ struct PendingLogin {
     phone: Option<String>,
     phone_submitting: bool,
     qr_requested: bool,
+    // Distinct from qr_requested, which is a one-shot startup trigger.
+    // Keep the selected login method through TDLib's 2FA step.
+    qr_mode: bool,
     remember_database: bool,
     newly_created: bool,
 }
