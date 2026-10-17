@@ -3,5 +3,6 @@
   "commit": "229fd56cc630ea1092eea12e633a81b9311553f0",
   "release_id": 415631369,
   "local_windows_install_verified": true,
-  "build_run_id": 39006433438
+  "build_run_id": 39006433438,
+  "retry": 1
 }
